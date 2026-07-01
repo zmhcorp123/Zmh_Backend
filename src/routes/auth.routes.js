@@ -54,9 +54,15 @@ router.post("/signup", asyncHandler(async (req, res) => {
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const user = await User.create({ name, email, passwordHash, company, phone });
+  const user = await User.create({ name, email, passwordHash, company, phone, status: "pending", isEmailVerified: false });
   await createAndSendOtp(user.email, "signup");
-  res.status(201).json({ ok: true, user: publicUser(user), token: signToken(user), message: "Account created. OTP sent." });
+  res.status(201).json({
+    ok: true,
+    user: publicUser(user),
+    requiresOtp: true,
+    requiresApproval: true,
+    message: "Account created. Check your email for the OTP. Admin approval is required before login.",
+  });
 }));
 
 router.post("/login", asyncHandler(async (req, res) => {
@@ -73,6 +79,16 @@ router.post("/login", asyncHandler(async (req, res) => {
   }
   if (user.status === "suspended") {
     const error = new Error("Account is suspended");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (!user.isEmailVerified) {
+    const error = new Error("Please verify your email OTP before logging in");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (user.status !== "active") {
+    const error = new Error("Your account is pending admin approval");
     error.statusCode = 403;
     throw error;
   }
@@ -124,11 +140,16 @@ router.post("/otp/verify", asyncHandler(async (req, res) => {
   await record.save();
   const user = await User.findOneAndUpdate(
     { email: email.toLowerCase() },
-    { isEmailVerified: true, status: "active" },
+    { isEmailVerified: true },
     { new: true }
   );
 
-  res.json({ ok: true, user: user ? publicUser(user) : null, token: user ? signToken(user) : null });
+  res.json({
+    ok: true,
+    user: user ? publicUser(user) : null,
+    requiresApproval: user?.status !== "active",
+    message: user?.status === "active" ? "Email verified. You can now log in." : "Email verified. Your account is waiting for admin approval.",
+  });
 }));
 
 router.post("/forgot-password", asyncHandler(async (req, res) => {
@@ -160,7 +181,7 @@ router.post("/reset-password", asyncHandler(async (req, res) => {
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
-  await User.findOneAndUpdate({ email: email.toLowerCase() }, { passwordHash, status: "active" });
+  await User.findOneAndUpdate({ email: email.toLowerCase() }, { passwordHash });
   record.usedAt = new Date();
   await record.save();
   res.json({ ok: true, message: "Password updated." });

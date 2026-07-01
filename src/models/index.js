@@ -33,8 +33,12 @@ const bookingSchema = new mongoose.Schema({
   afterHours: { type: String, trim: true, default: "" },
   crm: { type: String, trim: true, default: "" },
   integrationNotes: { type: String, trim: true, default: "" },
+  requestedDate: { type: Date, default: null },
   status: { type: String, enum: ["new", "needs review", "confirmed", "completed", "cancelled"], default: "new" },
   notes: { type: String, trim: true, default: "" },
+  adminResponse: { type: String, trim: true, default: "" },
+  respondedAt: { type: Date, default: null },
+  respondedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 }, { timestamps: true });
 
 const contactSchema = new mongoose.Schema({

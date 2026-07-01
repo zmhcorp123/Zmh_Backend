@@ -29,7 +29,7 @@ router.post("/query", asyncHandler(async (req, res) => {
   } else if (question.includes("after hours")) {
     answer = "After-hours coverage can be configured for evenings, weekends, emergencies, and overflow call windows.";
   } else if (question.includes("crm")) {
-    answer = "The backend is prepared for CRM notes, workflow data, and future integrations with common home service platforms.";
+    answer = "ZMH supports CRM notes, workflow data, and integrations around common home service platforms.";
   }
 
   res.json({ ok: true, answer });

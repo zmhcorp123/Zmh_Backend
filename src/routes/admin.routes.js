@@ -1,5 +1,5 @@
 const express = require("express");
-const { Booking, Invoice, Setting, User } = require("../models");
+const { Booking, Invoice, Notification, Setting, User } = require("../models");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { asyncHandler } = require("../utils/asyncHandler");
 
@@ -28,12 +28,27 @@ router.get("/bookings", asyncHandler(async (_req, res) => {
 }));
 
 router.patch("/bookings/:id", asyncHandler(async (req, res) => {
-  const allowed = ["status", "notes", "services", "hours", "afterHours", "crm", "integrationNotes"];
+  const allowed = ["status", "notes", "services", "hours", "afterHours", "crm", "integrationNotes", "requestedDate", "adminResponse"];
   const update = {};
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(req.body, key)) update[key] = req.body[key];
   }
-  const booking = await Booking.findByIdAndUpdate(req.params.id, update, { new: true });
+  if (Object.prototype.hasOwnProperty.call(update, "requestedDate")) {
+    update.requestedDate = update.requestedDate ? new Date(update.requestedDate) : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(update, "adminResponse")) {
+    update.respondedAt = new Date();
+    update.respondedBy = req.user._id;
+  }
+  const booking = await Booking.findByIdAndUpdate(req.params.id, update, { new: true }).populate("user", "name email company");
+  if (booking?.user?._id && (update.adminResponse || update.status)) {
+    await Notification.create({
+      user: booking.user._id,
+      title: "Booking update",
+      body: update.adminResponse || `Your booking status is now ${booking.status}.`,
+      type: "booking",
+    });
+  }
   res.json({ ok: true, booking });
 }));
 
