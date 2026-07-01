@@ -14,16 +14,26 @@ const chatbotRoutes = require("./src/routes/chatbot.routes");
 const app = express();
 const port = process.env.PORT || 5000;
 
-const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
+const defaultOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://zmhusacorp.com",
+  "https://www.zmhusacorp.com",
+];
+
+const configuredOrigins = (process.env.FRONTEND_URL || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
 
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error("Origin is not allowed by CORS"));
   },
+  methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 }));
 app.use(express.json({ limit: "1mb" }));
