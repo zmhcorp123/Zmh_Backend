@@ -64,6 +64,7 @@ if (fs.existsSync(frontendIndexPath)) {
     res.sendFile(frontendIndexPath);
   });
 } else {
+  
   app.get("/", (_req, res) => {
     res.json({ ok: true, name: "ZMH Backend API", version: "1.0.0" });
   });
