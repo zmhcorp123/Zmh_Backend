@@ -1,9 +1,9 @@
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, from: requestedFrom, attachments = [] }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM || "ZMH USA Corp <verify@zmhusacorp.com>";
+  const from = requestedFrom || process.env.RESEND_FROM || "ZMH USA Corp <verify@zmhusacorp.com>";
 
   if (!apiKey) {
-    console.log("[email skipped]", { to, subject, text });
+    console.log("[email skipped]", { from, to, subject, text, attachments: attachments.map((item) => item.filename) });
     return { skipped: true };
   }
 
@@ -13,7 +13,7 @@ async function sendEmail({ to, subject, html, text }) {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ from, to, subject, html, text }),
+    body: JSON.stringify({ from, to, subject, html, text, attachments }),
   });
 
   const data = await response.json().catch(() => ({}));

@@ -42,7 +42,23 @@ const bookingSchema = new mongoose.Schema({
   respondedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   activeServices: [{ type: String, trim: true }],
   serviceUpdates: { type: String, trim: true, default: "" },
+  contactPerson: { type: String, trim: true, default: "" },
+  packageName: { type: String, trim: true, default: "" },
+  packagePrice: { type: String, trim: true, default: "" },
+  assignedStaff: { type: String, trim: true, default: "" },
+  serviceStartDate: { type: Date, default: null },
+  nextBillingDate: { type: Date, default: null },
+  progressPercent: { type: Number, min: 0, max: 100, default: 0 },
+  paymentStatus: { type: String, enum: ["pending", "sent", "paid", "overdue", "waived"], default: "pending" },
+  filesUploaded: [{
+    name: { type: String, trim: true },
+    url: { type: String, trim: true },
+    uploadedAt: { type: Date, default: Date.now },
+  }],
 }, { timestamps: true });
+
+bookingSchema.index({ status: 1, createdAt: -1 });
+bookingSchema.index({ user: 1, status: 1 });
 
 const contactSchema = new mongoose.Schema({
   name: { type: String, trim: true, required: true },
@@ -63,6 +79,58 @@ const invoiceSchema = new mongoose.Schema({
   dueDate: { type: Date, default: null },
   lineItems: [{ label: String, amount: Number }],
   message: { type: String, trim: true, default: "" },
+}, { timestamps: true });
+
+invoiceSchema.index({ user: 1, createdAt: -1 });
+invoiceSchema.index({ company: 1, createdAt: -1 });
+
+const orderProgressSchema = new mongoose.Schema({
+  order: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", required: true, index: true },
+  title: { type: String, trim: true, required: true },
+  description: { type: String, trim: true, default: "" },
+  status: { type: String, enum: ["planned", "in progress", "completed", "blocked"], default: "completed" },
+  progressPercent: { type: Number, min: 0, max: 100, default: 0 },
+  adminName: { type: String, trim: true, default: "" },
+  admin: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  attachments: [{
+    name: { type: String, trim: true },
+    url: { type: String, trim: true },
+  }],
+  happenedAt: { type: Date, default: Date.now, index: true },
+}, { timestamps: true });
+
+orderProgressSchema.index({ order: 1, happenedAt: -1 });
+
+const packagePricingSchema = new mongoose.Schema({
+  slug: { type: String, trim: true, lowercase: true, required: true, unique: true },
+  name: { type: String, trim: true, required: true },
+  description: { type: String, trim: true, default: "" },
+  bestFor: { type: String, trim: true, default: "" },
+  price: { type: String, trim: true, default: "Custom" },
+  displayOrder: { type: Number, default: 0, index: true },
+  highlightBadge: { type: String, trim: true, default: "" },
+  buttonText: { type: String, trim: true, default: "Package details" },
+  buttonLink: { type: String, trim: true, default: "" },
+  status: { type: String, enum: ["active", "inactive"], default: "active", index: true },
+  recommended: { type: Boolean, default: false },
+  features: [{
+    text: { type: String, trim: true, required: true },
+    order: { type: Number, default: 0 },
+  }],
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+}, { timestamps: true });
+
+packagePricingSchema.index({ status: 1, displayOrder: 1 });
+
+const emailHistorySchema = new mongoose.Schema({
+  order: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
+  invoice: { type: mongoose.Schema.Types.ObjectId, ref: "Invoice", default: null },
+  to: { type: String, trim: true, lowercase: true, required: true },
+  from: { type: String, trim: true, default: "sales@zmhusacorp.com" },
+  subject: { type: String, trim: true, required: true },
+  status: { type: String, enum: ["sent", "skipped", "failed"], default: "sent" },
+  providerId: { type: String, trim: true, default: "" },
+  error: { type: String, trim: true, default: "" },
 }, { timestamps: true });
 
 const supportTicketSchema = new mongoose.Schema({
@@ -97,5 +165,8 @@ module.exports = {
   Invoice: mongoose.model("Invoice", invoiceSchema),
   SupportTicket: mongoose.model("SupportTicket", supportTicketSchema),
   Notification: mongoose.model("Notification", notificationSchema),
+  OrderProgress: mongoose.model("OrderProgress", orderProgressSchema),
+  PackagePricing: mongoose.model("PackagePricing", packagePricingSchema),
+  EmailHistory: mongoose.model("EmailHistory", emailHistorySchema),
   Setting: mongoose.model("Setting", settingSchema),
 };
