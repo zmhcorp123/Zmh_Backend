@@ -1,6 +1,6 @@
 async function sendEmail({ to, subject, html, text }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM || "ZMH USA Corp <onboarding@resend.dev>";
+  const from = process.env.RESEND_FROM || "ZMH USA Corp <verify@zmhusacorp.com>";
 
   if (!apiKey) {
     console.log("[email skipped]", { to, subject, text });
