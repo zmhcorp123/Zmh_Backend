@@ -8,6 +8,43 @@ const router = express.Router();
 
 router.use(requireAuth, requireAdmin);
 
+function bookingCustomerEmail(booking) {
+  return booking.email || booking.user?.email || "";
+}
+
+async function sendBookingDecisionEmail(booking) {
+  const to = bookingCustomerEmail(booking);
+  if (!to) return false;
+
+  const isCancelled = booking.status === "cancelled";
+  const subject = isCancelled ? "Your ZMH booking request was cancelled" : "Your ZMH booking request was confirmed";
+  const response = booking.adminResponse || (isCancelled
+    ? "Your booking request has been cancelled by the admin team."
+    : "Your booking request has been confirmed by the admin team.");
+
+  try {
+    await sendEmail({
+      to,
+      subject,
+      text: `Hi${booking.user?.name ? " " + booking.user.name : ""},\n\n${response}\n\nCompany: ${booking.companyName}\nStatus: ${booking.status}\nRequested date: ${booking.requestedDate ? booking.requestedDate.toDateString() : "Not selected"}\n\nZMH USA Corp`,
+      html: `
+        <p>Hi${booking.user?.name ? " " + booking.user.name : ""},</p>
+        <p>${response}</p>
+        <ul>
+          <li><strong>Company:</strong> ${booking.companyName}</li>
+          <li><strong>Status:</strong> ${booking.status}</li>
+          <li><strong>Requested date:</strong> ${booking.requestedDate ? booking.requestedDate.toDateString() : "Not selected"}</li>
+        </ul>
+        <p>ZMH USA Corp</p>
+      `,
+    });
+    return true;
+  } catch (error) {
+    console.error("[booking decision email failed]", error.message);
+    return false;
+  }
+}
+
 router.get("/users", asyncHandler(async (_req, res) => {
   const users = await User.find().select("-passwordHash").sort({ createdAt: -1 });
   res.json({ ok: true, users });
@@ -111,7 +148,9 @@ router.patch("/bookings/:id", asyncHandler(async (req, res) => {
     update.respondedAt = new Date();
     update.respondedBy = req.user._id;
   }
+  if (update.status === "confirmed") update.status = "ongoing";
   const booking = await Booking.findByIdAndUpdate(req.params.id, update, { new: true }).populate("user", "name email company");
+  let emailSent = false;
   if (booking?.user?._id && (update.adminResponse || update.status)) {
     await Notification.create({
       user: booking.user._id,
@@ -120,7 +159,15 @@ router.patch("/bookings/:id", asyncHandler(async (req, res) => {
       type: "booking",
     });
   }
-  res.json({ ok: true, booking });
+  if (booking && ["ongoing", "cancelled"].includes(booking.status) && (update.adminResponse || update.status)) {
+    emailSent = await sendBookingDecisionEmail(booking);
+  }
+  res.json({ ok: true, booking, emailSent });
+}));
+
+router.get("/settings", asyncHandler(async (_req, res) => {
+  const settings = await Setting.find().sort({ key: 1 });
+  res.json({ ok: true, settings });
 }));
 
 router.get("/bills", asyncHandler(async (_req, res) => {

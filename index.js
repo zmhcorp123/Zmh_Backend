@@ -12,6 +12,7 @@ const contactRoutes = require("./src/routes/contact.routes");
 const dashboardRoutes = require("./src/routes/dashboard.routes");
 const adminRoutes = require("./src/routes/admin.routes");
 const chatbotRoutes = require("./src/routes/chatbot.routes");
+const settingsRoutes = require("./src/routes/settings.routes");
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -55,6 +56,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api", dashboardRoutes);
+app.use("/api/settings", settingsRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/chatbot", chatbotRoutes);
 

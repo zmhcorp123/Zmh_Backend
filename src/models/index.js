@@ -23,6 +23,7 @@ const otpSchema = new mongoose.Schema({
 const bookingSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   companyName: { type: String, trim: true, required: true },
+  email: { type: String, trim: true, lowercase: true, default: "" },
   businessType: { type: String, trim: true, default: "" },
   employees: { type: String, trim: true, default: "" },
   website: { type: String, trim: true, default: "" },
@@ -34,7 +35,7 @@ const bookingSchema = new mongoose.Schema({
   crm: { type: String, trim: true, default: "" },
   integrationNotes: { type: String, trim: true, default: "" },
   requestedDate: { type: Date, default: null },
-  status: { type: String, enum: ["new", "needs review", "confirmed", "completed", "cancelled"], default: "new" },
+  status: { type: String, enum: ["new", "needs review", "confirmed", "ongoing", "completed", "cancelled"], default: "new" },
   notes: { type: String, trim: true, default: "" },
   adminResponse: { type: String, trim: true, default: "" },
   respondedAt: { type: Date, default: null },
