@@ -79,6 +79,7 @@ function defaultAccountDetails() {
     bankName: "Contact sales for bank details",
     accountNumber: "Provided on request",
     routingNumber: "",
+    iban: "",
     swiftCode: "",
     routingSwift: "Provided on request",
     branchName: "",
@@ -95,6 +96,7 @@ function normalizeAccountDetails(value = {}) {
     bankName: cleanString(value.bankName, defaults.bankName),
     accountNumber: cleanString(value.accountNumber, defaults.accountNumber),
     routingNumber: cleanString(value.routingNumber, defaults.routingNumber),
+    iban: cleanString(value.iban, defaults.iban),
     swiftCode: cleanString(value.swiftCode, defaults.swiftCode),
     routingSwift: cleanString(value.routingSwift || [value.routingNumber, value.swiftCode].filter(Boolean).join(" / "), defaults.routingSwift),
     branchName: cleanString(value.branchName, defaults.branchName),
@@ -167,66 +169,144 @@ function pdfEscape(value) {
   return String(value ?? "").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
 
-function createSummaryPdfBuffer(order, summary) {
-  const lines = [
-    "ZMH USA Corp",
-    "Invoice & Service Summary",
-    "",
-    `Client: ${summary.company.name}`,
-    `Contact: ${summary.company.contactPerson || "Not assigned"}`,
-    `Email: ${summary.company.email || "Not provided"}`,
-    `Phone: ${summary.company.phone || "Not provided"}`,
-    "",
-    `Package: ${summary.package.name}`,
-    `Price: ${summary.package.price}`,
-    `Order date: ${order.createdAt ? order.createdAt.toDateString() : "Not available"}`,
-    `Service start: ${order.serviceStartDate ? order.serviceStartDate.toDateString() : "Not selected"}`,
-    `Next billing: ${order.nextBillingDate ? order.nextBillingDate.toDateString() : "Not selected"}`,
-    `Payment status: ${summary.billing.paymentStatus}`,
-    `Progress: ${summary.currentProgress}%`,
-    "",
-    "Services Included",
-    ...(summary.package.servicesIncluded.length ? summary.package.servicesIncluded.map((item) => `- ${item}`) : ["- Custom operations support"]),
-    "",
-    "Completed Services",
-    ...(summary.servicesCompleted.length ? summary.servicesCompleted.map((item) => `- ${item}`) : ["- No completed progress updates yet"]),
-    "",
-    "Remaining Services",
-    ...(summary.servicesRemaining.length ? summary.servicesRemaining.map((item) => `- ${item}`) : ["- Remaining services will be confirmed by the ZMH team"]),
-    "",
-    "Recent Timeline",
-    ...(summary.timeline.length ? summary.timeline.slice(0, 8).map((item) => `- ${item.title} (${item.status}, ${item.progressPercent}%)`) : ["- Timeline updates will appear after admin progress is added"]),
-    "",
-    "Bank Transfer Details",
-    `Beneficiary Name: ${summary.accountDetails.beneficiaryName}`,
-    `Bank Name: ${summary.accountDetails.bankName}`,
-    `Account Number: ${summary.accountDetails.accountNumber}`,
-    `Routing Number: ${summary.accountDetails.routingNumber || "Provided on request"}`,
-    `SWIFT Code: ${summary.accountDetails.swiftCode || "Provided on request"}`,
-    `Branch Name: ${summary.accountDetails.branchName || "Not provided"}`,
-    `Bank Address: ${summary.accountDetails.bankAddress || "Not provided"}`,
-    `Reference: ${summary.accountDetails.referencePrefix}-${order._id}`,
-    `Payment Instructions: ${summary.accountDetails.paymentInstructions}`,
-    "",
-    `Admin Notes: ${summary.notes || "No admin notes"}`,
-    "",
-    "Footer: zmhusacorp.com | sales@zmhusacorp.com | Page 1",
-  ];
+function formatDate(value) {
+  return value ? new Date(value).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "Not selected";
+}
 
-  const content = [
-    "0.08 0.37 1 rg 0 760 612 32 re f",
-    "1 1 1 rg BT /F1 18 Tf 48 770 Td (ZMH USA Corp) Tj ET",
-    "0.06 0.09 0.16 rg BT /F1 11 Tf 48 730 Td",
-    ...lines.map((line, index) => `${index ? "0 -16 Td" : ""} (${pdfEscape(line).slice(0, 92)}) Tj`),
-    "ET",
+function numericPrice(value) {
+  const amount = Number(String(value || "").replace(/[^0-9.]/g, ""));
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function invoiceMeta(order, summary) {
+  const invoice = summary.billing.invoices?.[0];
+  const year = new Date(order.createdAt || Date.now()).getFullYear();
+  const reference = `${summary.accountDetails.referencePrefix}-${String(order._id).slice(-8).toUpperCase()}`;
+  const invoiceNumber = invoice?.invoice || `INV-${year}-${String(order._id).slice(-6).toUpperCase()}`;
+  const subtotal = invoice?.amount || numericPrice(summary.package.price);
+  return {
+    invoiceNumber,
+    reference,
+    issueDate: formatDate(new Date()),
+    dueDate: formatDate(invoice?.dueDate || order.nextBillingDate),
+    subtotal,
+    discount: 0,
+    tax: 0,
+    total: subtotal,
+    amountPaid: summary.billing.paymentStatus === "paid" ? subtotal : 0,
+    outstanding: summary.billing.paymentStatus === "paid" ? 0 : subtotal,
+    currency: invoice?.currency || "USD",
+    paymentTerms: "Due on receipt unless otherwise stated",
+    preparedBy: "ZMH USA Corp Sales Team",
+  };
+}
+
+function chunkText(text, length = 72) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    if (`${line} ${word}`.trim().length > length) {
+      if (line) lines.push(line);
+      line = word;
+    } else {
+      line = `${line} ${word}`.trim();
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
+}
+
+function createSummaryPdfBuffer(order, summary) {
+  const meta = invoiceMeta(order, summary);
+  const pageCount = 8;
+  const brand = { blue: "0.04 0.35 1", green: "0.09 0.77 0.50", dark: "0.06 0.09 0.16", muted: "0.38 0.43 0.51", orange: "0.98 0.45 0.08", red: "0.86 0.15 0.15", light: "0.96 0.98 1" };
+  const statusColor = (status = "") => status === "completed" || status === "paid" ? brand.green : status === "blocked" || status === "overdue" ? brand.red : status === "in progress" || status === "sent" ? brand.blue : brand.orange;
+  const services = summary.package.servicesIncluded.length ? summary.package.servicesIncluded : ["Custom operations support"];
+  const completed = summary.servicesCompleted.length ? summary.servicesCompleted : ["Progress updates pending"];
+  const remaining = summary.servicesRemaining.length ? summary.servicesRemaining : ["Remaining scope to be confirmed"];
+  const progressValue = Math.max(0, Math.min(100, Number(summary.currentProgress) || 0));
+  const healthScore = progressValue >= 80 ? 96 : progressValue >= 50 ? 88 : progressValue >= 20 ? 76 : 68;
+
+  const op = {
+    text: (x, y, text, size = 10, font = "F1", color = brand.dark) => `${color} rg BT /${font} ${size} Tf ${x} ${y} Td (${pdfEscape(String(text).slice(0, 110))}) Tj ET`,
+    rect: (x, y, w, h, color = "1 1 1", stroke = "0.86 0.89 0.94") => `${color} rg ${x} ${y} ${w} ${h} re f ${stroke} RG ${x} ${y} ${w} ${h} re S`,
+    line: (x1, y1, x2, y2, color = "0.86 0.89 0.94", width = 1) => `${color} RG ${width} w ${x1} ${y1} m ${x2} ${y2} l S`,
+    pill: (x, y, text, color = brand.blue) => [`${color} rg ${x} ${y} 118 22 re f`, op.text(x + 10, y + 7, text, 9, "F2", "1 1 1")].join("\n"),
+    progress: (x, y, w, pct, color = brand.green) => [`0.90 0.94 1 rg ${x} ${y} ${w} 9 re f`, `${color} rg ${x} ${y} ${Math.max(4, w * pct / 100)} 9 re f`].join("\n"),
+    footer: (page) => [op.line(42, 44, 570, 44), op.text(42, 28, "ZMH USA Corp | sales@zmhusacorp.com | zmhusacorp.com", 8, "F1", brand.muted), op.text(532, 28, `Page ${page} / ${pageCount}`, 8, "F2", brand.muted)].join("\n"),
+    header: (title, page) => [`${brand.blue} rg 0 754 612 38 re f`, `${brand.green} rg 448 754 164 38 re f`, op.text(42, 768, "ZMH USA Corp", 13, "F2", "1 1 1"), op.text(42, 724, title, 24, "F2", brand.dark), op.footer(page)].join("\n"),
+  };
+
+  const field = (x, y, label, value) => [op.text(x, y + 18, label, 8, "F2", brand.muted), op.text(x, y, value || "Not provided", 11, "F2", brand.dark)].join("\n");
+  const qr = (x, y, seed) => Array.from({ length: 9 }, (_, row) => Array.from({ length: 9 }, (_, col) => ((row * 11 + col * 7 + seed.length) % 5 < 2 ? `${brand.dark} rg ${x + col * 6} ${y + row * 6} 4 4 re f` : "")).join("\n")).join("\n");
+  const barcode = (x, y, seed) => Array.from({ length: 34 }, (_, index) => `${brand.dark} rg ${x + index * 5} ${y} ${((seed.charCodeAt(index % seed.length) || 3) % 3) + 1} 46 re f`).join("\n");
+
+  const page1 = [
+    `${brand.blue} rg 0 610 612 182 re f`, `${brand.green} rg 384 610 228 182 re f`,
+    op.text(48, 712, "ZMH USA Corp", 30, "F2", "1 1 1"),
+    op.text(48, 670, "Invoice & Service Summary", 34, "F2", "1 1 1"),
+    op.text(48, 646, "Executive service, billing, and operational progress report", 13, "F1", "0.88 0.94 1"),
+    op.rect(42, 392, 528, 168, "1 1 1"),
+    field(64, 520, "Invoice Number", meta.invoiceNumber), field(244, 520, "Order Reference", meta.reference), field(424, 520, "Issue Date", meta.issueDate),
+    field(64, 472, "Due Date", meta.dueDate), field(244, 472, "Prepared By", meta.preparedBy), field(424, 472, "Client Company", summary.company.name),
+    field(64, 424, "Contact Person", summary.company.contactPerson), field(244, 424, "Package", summary.package.name), field(424, 424, "Current Status", order.status),
+    op.pill(64, 340, `Payment: ${summary.billing.paymentStatus}`, statusColor(summary.billing.paymentStatus)),
+    op.pill(204, 340, `Progress: ${progressValue}%`, brand.blue),
+    op.pill(344, 340, `Package: ${summary.package.name}`, brand.green),
+    op.text(64, 260, "Confidential client document prepared for executive review.", 16, "F2"),
+    op.footer(1),
   ].join("\n");
 
+  const clientFields = [
+    ["Company", summary.company.name], ["Contact Person", summary.company.contactPerson], ["Email", summary.company.email], ["Phone", summary.company.phone],
+    ["Website", summary.company.website], ["Address", summary.company.address], ["Industry", order.businessType || "Home services"], ["Package Purchased", summary.package.name],
+    ["Monthly Price", summary.package.price], ["Contract Start", formatDate(order.serviceStartDate || order.createdAt)], ["Renewal Date", formatDate(order.nextBillingDate)], ["Next Billing Date", formatDate(order.nextBillingDate)],
+    ["Current Progress", `${progressValue}%`], ["Dedicated Account Manager", order.assignedStaff || "ZMH Client Success"],
+  ];
+  const page2 = [op.header("Client Information", 2), ...clientFields.map(([label, value], index) => {
+    const col = index % 2; const row = Math.floor(index / 2); const x = col ? 316 : 48; const y = 654 - row * 72;
+    return [op.rect(x, y - 22, 248, 52, "1 1 1"), field(x + 16, y, label, value)].join("\n");
+  })].join("\n");
+
+  const serviceCards = services.slice(0, 9).map((service, index) => {
+    const col = index % 3; const row = Math.floor(index / 3); const x = 48 + col * 174; const y = 548 - row * 128;
+    const done = summary.servicesCompleted.some((item) => item.toLowerCase().includes(String(service).toLowerCase()));
+    return [op.rect(x, y, 158, 104, "1 1 1"), op.text(x + 14, y + 76, "●", 18, "F2", done ? brand.green : brand.blue), op.text(x + 38, y + 80, service, 11, "F2"), op.text(x + 14, y + 58, done ? "Completed service milestone" : "Service delivery in progress", 8, "F1", brand.muted), op.progress(x + 14, y + 34, 126, done ? 100 : progressValue), op.text(x + 14, y + 18, done ? "Completed | 100%" : `${order.status} | ${progressValue}%`, 8, "F2", done ? brand.green : brand.blue)].join("\n");
+  });
+  const page3 = [op.header("Package Breakdown", 3), op.rect(48, 610, 516, 82, "1 1 1"), op.text(70, 660, summary.package.name, 24, "F2"), op.text(70, 634, `${summary.package.price} | Monthly operations support`, 14, "F2", brand.orange), op.pill(394, 642, order.status, statusColor(order.status)), ...serviceCards].join("\n");
+
+  const timeline = (summary.timeline.length ? summary.timeline : [{ title: "Service timeline pending", description: "Progress updates will appear here after admin activity is recorded.", status: "planned", progressPercent: progressValue, happenedAt: new Date(), adminName: "ZMH Admin" }]).slice(0, 8);
+  const page4 = [op.header("Service Progress", 4), ...timeline.map((item, index) => {
+    const y = 650 - index * 72; const color = statusColor(item.status);
+    return [op.line(70, y - 42, 70, y + 22, "0.82 0.86 0.92", 2), `${color} rg 62 ${y + 6} 16 16 re f`, op.text(92, y + 14, `${formatDate(item.happenedAt)} | ${item.adminName || item.admin?.name || "Admin"}`, 8, "F2", brand.muted), op.text(92, y, item.title, 12, "F2"), op.text(92, y - 16, chunkText(item.description || "No description provided.", 74)[0], 8, "F1", brand.muted), op.progress(426, y - 2, 92, item.progressPercent || 0, color), op.text(526, y - 4, `${item.progressPercent || 0}%`, 8, "F2", color)].join("\n");
+  })].join("\n");
+
+  const page5 = [op.header("Service Analytics", 5), op.rect(48, 560, 160, 120, "1 1 1"), op.text(78, 632, `${progressValue}%`, 34, "F2", brand.blue), op.text(78, 608, "Completion", 12, "F2"), op.progress(78, 590, 100, progressValue), op.rect(226, 560, 160, 120, "1 1 1"), op.text(256, 632, `${100 - progressValue}%`, 34, "F2", brand.orange), op.text(256, 608, "Remaining", 12, "F2"), op.rect(404, 560, 160, 120, "1 1 1"), op.text(434, 632, `${healthScore}`, 34, "F2", brand.green), op.text(434, 608, "Health Score", 12, "F2"), op.text(48, 500, "Completed Services", 16, "F2"), ...completed.slice(0, 8).map((item, i) => op.text(64, 474 - i * 22, `✓ ${item}`, 10, "F2", brand.green)), op.text(316, 500, "Remaining Services", 16, "F2"), ...remaining.slice(0, 8).map((item, i) => op.text(332, 474 - i * 22, `• ${item}`, 10, "F2", brand.blue)), op.rect(48, 150, 516, 78, "1 1 1"), field(70, 188, "Current Milestone", completed[0] || "Initial setup"), field(260, 188, "Next Milestone", remaining[0] || "Executive review"), field(438, 188, "Estimated Completion", progressValue >= 100 ? "Completed" : "In progress")].join("\n");
+
+  const invoiceRows = [["Package", summary.package.name], ["Subtotal", `${meta.currency} ${meta.subtotal.toFixed(2)}`], ["Discount", `${meta.currency} ${meta.discount.toFixed(2)}`], ["Tax", `${meta.currency} ${meta.tax.toFixed(2)}`], ["Total", `${meta.currency} ${meta.total.toFixed(2)}`], ["Amount Paid", `${meta.currency} ${meta.amountPaid.toFixed(2)}`], ["Outstanding Balance", `${meta.currency} ${meta.outstanding.toFixed(2)}`], ["Payment Terms", meta.paymentTerms], ["Reference Number", meta.reference]];
+  const page6 = [op.header("Invoice Summary", 6), op.rect(48, 594, 516, 92, "1 1 1"), field(70, 652, "Invoice Number", meta.invoiceNumber), field(260, 652, "Currency", meta.currency), field(420, 652, "Payment Status", summary.billing.paymentStatus), op.pill(420, 612, summary.billing.paymentStatus, statusColor(summary.billing.paymentStatus)), ...invoiceRows.map(([label, value], i) => [op.line(70, 560 - i * 36, 382, 560 - i * 36), op.text(74, 542 - i * 36, label, 10, "F2", brand.muted), op.text(246, 542 - i * 36, value, 10, "F2", brand.dark)].join("\n")), op.rect(420, 368, 112, 112, "1 1 1"), qr(438, 392, meta.invoiceNumber), op.text(428, 344, "Invoice QR", 10, "F2", brand.muted), barcode(420, 270, meta.invoiceNumber), op.text(420, 252, "Barcode", 9, "F2", brand.muted)].join("\n");
+
+  const bankRows = [["Beneficiary Name", summary.accountDetails.beneficiaryName], ["Bank Name", summary.accountDetails.bankName], ["Account Number", summary.accountDetails.accountNumber], ["Routing Number", summary.accountDetails.routingNumber || "Provided on request"], ["IBAN", summary.accountDetails.iban || "Not provided"], ["SWIFT", summary.accountDetails.swiftCode || "Provided on request"], ["Branch", summary.accountDetails.branchName || "Not provided"], ["Bank Address", summary.accountDetails.bankAddress || "Not provided"], ["Payment Reference", meta.reference], ["Payment Instructions", summary.accountDetails.paymentInstructions]];
+  const page7 = [op.header("Bank Transfer Details", 7), ...bankRows.map(([label, value], index) => {
+    const y = 650 - index * 52;
+    return [op.rect(48, y - 20, 516, 42, index % 2 ? "0.98 0.99 1" : "1 1 1"), op.text(66, y + 4, label, 9, "F2", brand.muted), op.text(238, y + 2, value, 10, "F2")].join("\n");
+  }), op.rect(48, 84, 516, 60, "1 1 1"), op.text(66, 118, "Important Notes", 12, "F2"), op.text(66, 98, "Use the payment reference exactly as shown to avoid posting delays. Contact sales@zmhusacorp.com for support.", 9, "F1", brand.muted)].join("\n");
+
+  const page8 = [op.header("Company Information", 8), op.text(48, 664, "About ZMH USA Corp", 24, "F2"), ...chunkText("ZMH USA Corp provides remote operations support for home service companies, helping teams manage calls, dispatch, customer support, CRM workflows, billing coordination, and service reporting with professional operating discipline.", 88).map((line, i) => op.text(48, 632 - i * 16, line, 10, "F1", brand.muted)), op.rect(48, 472, 516, 94, "1 1 1"), field(70, 532, "Mission", "Make premium remote operations accessible to growing service companies."), field(70, 488, "Website", "zmhusacorp.com"), field(250, 488, "Support Email", "support@zmhusacorp.com"), field(430, 488, "Sales Email", "sales@zmhusacorp.com"), op.rect(48, 300, 240, 92, "1 1 1"), field(70, 350, "Phone", "+1 (555) 018-2048"), field(70, 314, "Business Hours", "Monday-Friday, 9 AM-6 PM ET"), op.rect(324, 284, 150, 150, "1 1 1"), qr(354, 326, "zmhusacorp.com"), op.text(344, 300, "Website QR Code", 10, "F2", brand.muted), op.text(48, 220, "Thank you for choosing ZMH USA Corp.", 20, "F2", brand.blue)].join("\n");
+
+  const contents = [page1, page2, page3, page4, page5, page6, page7, page8];
+  const pageObjectStart = 6;
+  const contentObjectStart = pageObjectStart + contents.length;
+  const pageRefs = contents.map((_, index) => `${pageObjectStart + index} 0 R`).join(" ");
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    `<< /Type /Pages /Kids [${pageRefs}] /Count ${contents.length} >>`,
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+    ...contents.map((_, index) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents ${contentObjectStart + index} 0 R >>`),
+    ...contents.map((content) => `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`),
   ];
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
@@ -244,33 +324,46 @@ function createSummaryPdfBuffer(order, summary) {
 }
 
 function buildSummaryEmail(order, summary) {
-  const subject = `ZMH Invoice Summary for ${order.companyName}`;
+  const meta = invoiceMeta(order, summary);
+  const subject = `ZMH USA Corp | Invoice & Service Summary | ${order.companyName} | ${meta.invoiceNumber}`;
+  const outstanding = `${meta.currency} ${meta.outstanding.toFixed(2)}`;
+  const progress = Math.max(0, Math.min(100, Number(summary.currentProgress) || 0));
   const html = `
-    <div style="margin:0;padding:0;background:#f8fafc;font-family:Inter,Segoe UI,Arial,sans-serif;color:#172033">
-      <div style="max-width:680px;margin:0 auto;padding:28px">
-        <div style="background:#0b5fff;color:white;border-radius:18px 18px 0 0;padding:24px">
-          <div style="font-size:24px;font-weight:900">ZMH USA Corp</div>
-          <p style="margin:8px 0 0;color:#eaf1ff">Premium operations support summary</p>
+    <div style="margin:0;padding:0;background:#eef4ff;font-family:Inter,Segoe UI,Arial,sans-serif;color:#172033">
+      <div style="display:none;max-height:0;overflow:hidden">Your premium ZMH invoice and service summary is attached.</div>
+      <div style="max-width:720px;margin:0 auto;padding:28px">
+        <div style="background:linear-gradient(135deg,#0b5fff,#16c47f);color:white;border-radius:24px 24px 0 0;padding:34px">
+          <div style="display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:16px;background:rgba(255,255,255,.18);font-size:24px;font-weight:900">Z</div>
+          <h1 style="margin:20px 0 8px;font-size:30px;line-height:1.12">Invoice & Service Summary</h1>
+          <p style="margin:0;color:#eaf1ff;font-size:15px">Prepared for ${escapeHtml(order.companyName)} by ZMH USA Corp.</p>
         </div>
-        <div style="background:white;border:1px solid #dce3ee;border-top:0;border-radius:0 0 18px 18px;padding:24px">
-          <p>Hi ${escapeHtml(summary.company.contactPerson || order.companyName)},</p>
-          <p>Your latest service and invoice summary is attached as a PDF. A quick overview is below.</p>
-          <table style="width:100%;border-collapse:collapse;margin:18px 0">
-            <tr><td style="padding:10px;border-bottom:1px solid #edf1f7"><strong>Company</strong></td><td style="padding:10px;border-bottom:1px solid #edf1f7">${escapeHtml(order.companyName)}</td></tr>
-            <tr><td style="padding:10px;border-bottom:1px solid #edf1f7"><strong>Package</strong></td><td style="padding:10px;border-bottom:1px solid #edf1f7">${escapeHtml(summary.package.name)}</td></tr>
-            <tr><td style="padding:10px;border-bottom:1px solid #edf1f7"><strong>Price</strong></td><td style="padding:10px;border-bottom:1px solid #edf1f7">${escapeHtml(summary.package.price)}</td></tr>
-            <tr><td style="padding:10px;border-bottom:1px solid #edf1f7"><strong>Progress</strong></td><td style="padding:10px;border-bottom:1px solid #edf1f7">${summary.currentProgress}%</td></tr>
-            <tr><td style="padding:10px;border-bottom:1px solid #edf1f7"><strong>Payment</strong></td><td style="padding:10px;border-bottom:1px solid #edf1f7">${escapeHtml(summary.billing.paymentStatus)}</td></tr>
-          </table>
-          <p><strong>Completed:</strong> ${escapeHtml(summary.servicesCompleted.join(", ") || "Progress updates are being prepared.")}</p>
-          <p><strong>Remaining:</strong> ${escapeHtml(summary.servicesRemaining.join(", ") || "No remaining services listed.")}</p>
-          <p>Please review the attached PDF for service progress, invoice history, bank transfer details, and admin notes.</p>
-          <p>Best regards,<br />ZMH USA Corp Sales Team</p>
-          <div style="margin-top:24px;padding-top:16px;border-top:1px solid #edf1f7;color:#667085;font-size:13px">sales@zmhusacorp.com | zmhusacorp.com</div>
+        <div style="background:white;border:1px solid #dce3ee;border-top:0;border-radius:0 0 24px 24px;padding:28px">
+          <p style="margin:0 0 14px;font-size:16px">Hi ${escapeHtml(summary.company.contactPerson || order.companyName)},</p>
+          <p style="margin:0 0 22px;color:#667085;line-height:1.7">Your latest enterprise invoice and service summary is attached as a premium PDF. The document includes service progress, invoice details, banking instructions, analytics, and timeline history.</p>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:22px 0">
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Invoice</strong><span style="display:block;margin-top:6px;font-size:20px;font-weight:900">${escapeHtml(meta.invoiceNumber)}</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Outstanding</strong><span style="display:block;margin-top:6px;font-size:20px;font-weight:900;color:#f97316">${escapeHtml(outstanding)}</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Package</strong><span style="display:block;margin-top:6px;font-size:18px;font-weight:900">${escapeHtml(summary.package.name)}</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Progress</strong><span style="display:block;margin-top:6px;font-size:18px;font-weight:900;color:#0b5fff">${progress}% complete</span></div>
+          </div>
+          <div style="margin:20px 0;padding:18px;border-radius:18px;background:#0f172a;color:white">
+            <strong style="display:block;font-size:16px">Service Summary</strong>
+            <p style="margin:8px 0 0;color:#dbe7ff;line-height:1.65">Completed: ${escapeHtml(summary.servicesCompleted.join(", ") || "Progress updates are being prepared.")}</p>
+            <p style="margin:8px 0 0;color:#dbe7ff;line-height:1.65">Remaining: ${escapeHtml(summary.servicesRemaining.join(", ") || "No remaining services listed.")}</p>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin:24px 0">
+            <a href="https://zmhusacorp.com/invoices" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#0b5fff;color:white;text-decoration:none;font-weight:800">Download Invoice</a>
+            <a href="https://zmhusacorp.com/user-dashboard" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#eef4ff;color:#0b5fff;text-decoration:none;font-weight:800">Visit Dashboard</a>
+            <a href="https://zmhusacorp.com/book-meeting" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#eef4ff;color:#0b5fff;text-decoration:none;font-weight:800">Book Meeting</a>
+            <a href="mailto:sales@zmhusacorp.com" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#eef4ff;color:#0b5fff;text-decoration:none;font-weight:800">Support</a>
+          </div>
+          <p style="margin:0;color:#667085;line-height:1.7">The PDF attachment contains your full invoice number, order summary, service timeline, banking instructions, and company contact details.</p>
+          <p style="margin:24px 0 0">Best regards,<br /><strong>ZMH USA Corp Sales Team</strong></p>
+          <div style="margin-top:24px;padding-top:16px;border-top:1px solid #edf1f7;color:#667085;font-size:13px">sales@zmhusacorp.com | zmhusacorp.com | This email is optimized for light and dark mode clients.</div>
         </div>
       </div>
     </div>`;
-  const text = `Hi ${summary.company.contactPerson || order.companyName}, your ZMH invoice summary PDF is attached. Package: ${summary.package.name}. Progress: ${summary.currentProgress}%.`;
+  const text = `Hi ${summary.company.contactPerson || order.companyName}, your ZMH invoice and service summary PDF is attached. Invoice: ${meta.invoiceNumber}. Package: ${summary.package.name}. Progress: ${progress}%. Outstanding: ${outstanding}.`;
   return { subject, html, text };
 }
 
