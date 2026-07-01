@@ -49,7 +49,7 @@ const bookingSchema = new mongoose.Schema({
   serviceStartDate: { type: Date, default: null },
   nextBillingDate: { type: Date, default: null },
   progressPercent: { type: Number, min: 0, max: 100, default: 0 },
-  paymentStatus: { type: String, enum: ["pending", "sent", "paid", "overdue", "waived"], default: "pending" },
+  paymentStatus: { type: String, enum: ["pending", "sent", "payment submitted", "payment rejected", "paid", "overdue", "waived"], default: "pending" },
   filesUploaded: [{
     name: { type: String, trim: true },
     url: { type: String, trim: true },
@@ -133,6 +133,28 @@ const emailHistorySchema = new mongoose.Schema({
   error: { type: String, trim: true, default: "" },
 }, { timestamps: true });
 
+const paymentSubmissionSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  order: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
+  invoice: { type: mongoose.Schema.Types.ObjectId, ref: "Invoice", required: true, index: true },
+  amount: { type: Number, default: 0 },
+  currency: { type: String, default: "USD" },
+  paymentDate: { type: Date, required: true },
+  paymentMethod: { type: String, trim: true, required: true },
+  transactionId: { type: String, trim: true, required: true },
+  note: { type: String, trim: true, default: "" },
+  screenshot: {
+    name: { type: String, trim: true, default: "" },
+    dataUrl: { type: String, trim: true, default: "" },
+  },
+  status: { type: String, enum: ["submitted", "approved", "rejected"], default: "submitted", index: true },
+  reviewReason: { type: String, trim: true, default: "" },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  reviewedAt: { type: Date, default: null },
+}, { timestamps: true });
+
+paymentSubmissionSchema.index({ invoice: 1, status: 1 });
+
 const supportTicketSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   subject: { type: String, trim: true, required: true },
@@ -168,5 +190,6 @@ module.exports = {
   OrderProgress: mongoose.model("OrderProgress", orderProgressSchema),
   PackagePricing: mongoose.model("PackagePricing", packagePricingSchema),
   EmailHistory: mongoose.model("EmailHistory", emailHistorySchema),
+  PaymentSubmission: mongoose.model("PaymentSubmission", paymentSubmissionSchema),
   Setting: mongoose.model("Setting", settingSchema),
 };

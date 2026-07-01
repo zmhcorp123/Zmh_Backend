@@ -1,5 +1,5 @@
 const express = require("express");
-const { Booking, EmailHistory, Invoice, Notification, OrderProgress, PackagePricing, Setting, SupportTicket, User } = require("../models");
+const { Booking, EmailHistory, Invoice, Notification, OrderProgress, PackagePricing, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { asyncHandler } = require("../utils/asyncHandler");
@@ -323,6 +323,164 @@ function createSummaryPdfBuffer(order, summary) {
   return Buffer.from(pdf);
 }
 
+function createExecutiveSummaryPdfBuffer(order, summary) {
+  const meta = invoiceMeta(order, summary);
+  const brand = {
+    blue: "0.04 0.35 1",
+    green: "0.09 0.77 0.50",
+    dark: "0.06 0.09 0.16",
+    muted: "0.38 0.43 0.51",
+    orange: "0.98 0.45 0.08",
+    red: "0.86 0.15 0.15",
+    line: "0.86 0.89 0.94",
+    white: "1 1 1",
+  };
+  const services = summary.package.servicesIncluded.length ? summary.package.servicesIncluded : ["Custom operations support"];
+  const completed = summary.servicesCompleted || [];
+  const remaining = summary.servicesRemaining.length ? summary.servicesRemaining : services.filter((service) => !completed.some((done) => done.toLowerCase().includes(String(service).toLowerCase())));
+  const invoices = summary.billing.invoices || [];
+  const files = order.filesUploaded || [];
+  const progressValue = Math.max(0, Math.min(100, Number(summary.currentProgress) || 0));
+  const needsAppendix = Boolean(summary.notes) || files.length > 0 || invoices.length > 4 || services.length > 10 || summary.timeline.length > 6;
+  const pageCount = needsAppendix ? 3 : 2;
+  const statusColor = (status = "") => {
+    const value = String(status).toLowerCase();
+    if (["paid", "completed", "approved"].includes(value)) return brand.green;
+    if (["overdue", "blocked", "cancelled", "payment rejected"].includes(value)) return brand.red;
+    if (["sent", "ongoing", "in progress", "payment submitted"].includes(value)) return brand.blue;
+    return brand.orange;
+  };
+  const op = {
+    text: (x, y, value, size = 10, font = "F1", color = brand.dark, limit = 90) => `${color} rg BT /${font} ${size} Tf ${x} ${y} Td (${pdfEscape(String(value || "").slice(0, limit))}) Tj ET`,
+    rect: (x, y, w, h, fill = brand.white, stroke = brand.line) => `${fill} rg ${x} ${y} ${w} ${h} re f ${stroke} RG ${x} ${y} ${w} ${h} re S`,
+    line: (x1, y1, x2, y2, color = brand.line, width = 1) => `${color} RG ${width} w ${x1} ${y1} m ${x2} ${y2} l S`,
+    footer: (page) => [op.line(36, 38, 576, 38), op.text(36, 22, "ZMH USA Corp | sales@zmhusacorp.com | zmhusacorp.com", 8, "F1", brand.muted), op.text(536, 22, `Page ${page} / ${pageCount}`, 8, "F2", brand.muted)].join("\n"),
+    pill: (x, y, value, fill = brand.blue, w = 120) => [`${fill} rg ${x} ${y} ${w} 22 re f`, op.text(x + 10, y + 7, value, 8.5, "F2", brand.white, 34)].join("\n"),
+    progress: (x, y, w, pct, color = brand.green) => [`0.90 0.94 1 rg ${x} ${y} ${w} 10 re f`, `${color} rg ${x} ${y} ${Math.max(4, w * pct / 100)} 10 re f`].join("\n"),
+  };
+  const logo = (x, y) => [op.rect(x, y, 42, 42, brand.blue, brand.blue), op.text(x + 13, y + 13, "Z", 20, "F2", brand.white)].join("\n");
+  const title = (x, y, value) => [op.text(x, y, value, 15, "F2"), `${brand.blue} rg ${x} ${y - 8} 28 3 re f`].join("\n");
+  const card = (x, y, w, h, label, value, color = brand.blue) => [op.rect(x + 2, y - 2, w, h, "0.89 0.92 0.96", "0.89 0.92 0.96"), op.rect(x, y, w, h), `${color} rg ${x} ${y + h - 4} ${w} 4 re f`, op.text(x + 12, y + h - 22, label, 7.5, "F2", brand.muted, 28), op.text(x + 12, y + 15, value || "Not provided", 12, "F2", brand.dark, 34)].join("\n");
+  const miniCard = (x, y, w, h, label, value, color = brand.blue) => [op.rect(x, y, w, h), op.text(x + 10, y + h - 18, label, 7, "F2", brand.muted, 24), op.text(x + 10, y + 13, value || "Not provided", 10, "F2", color, 34)].join("\n");
+  const chip = (x, y, w, value, color = brand.blue, fill = "0.94 0.97 1") => [op.rect(x, y, w, 32, fill, "0.82 0.87 0.94"), op.text(x + 9, y + 11, value, 8.2, "F2", color, 34)].join("\n");
+  const qr = (x, y, seed) => Array.from({ length: 9 }, (_, row) => Array.from({ length: 9 }, (_, col) => ((row * 11 + col * 7 + seed.length) % 5 < 2 ? `${brand.dark} rg ${x + col * 5} ${y + row * 5} 4 4 re f` : "")).join("\n")).join("\n");
+  const timeline = (items, x, y, max = 4) => (items.length ? items : [{ title: "Service timeline pending", status: "planned", progressPercent: progressValue, happenedAt: new Date() }]).slice(0, max).map((item, index) => {
+    const rowY = y - index * 44;
+    const color = statusColor(item.status);
+    return [op.line(x + 8, rowY - 28, x + 8, rowY + 8, brand.line, 1.4), `${color} rg ${x + 3} ${rowY + 3} 10 10 re f`, op.text(x + 24, rowY + 5, item.title, 8.8, "F2", brand.dark, 44), op.text(x + 24, rowY - 10, `${formatDate(item.happenedAt)} | ${item.status || "planned"} | ${item.progressPercent || 0}%`, 7.2, "F1", brand.muted, 48)].join("\n");
+  }).join("\n");
+  const ring = (cx, cy, pct) => {
+    const ops = [];
+    const active = Math.round(20 * pct / 100);
+    for (let index = 0; index < 20; index += 1) {
+      const angle = (Math.PI * 2 * index / 20) - Math.PI / 2;
+      ops.push(`${index < active ? brand.green : "0.86 0.90 0.96"} rg ${(cx + Math.cos(angle) * 42).toFixed(1)} ${(cy + Math.sin(angle) * 42).toFixed(1)} 8 8 re f`);
+    }
+    return [...ops, op.rect(cx - 29, cy - 29, 66, 66, brand.white, brand.white), op.text(cx - 23, cy + 2, `${pct}%`, 22, "F2", brand.blue), op.text(cx - 24, cy - 15, "complete", 8, "F2", brand.muted)].join("\n");
+  };
+
+  const page1 = [
+    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"), op.rect(0, 620, 612, 172, brand.dark, brand.dark), `${brand.blue} rg 382 620 230 172 re f`,
+    logo(38, 704), op.text(92, 728, "ZMH USA Corp", 18, "F2", brand.white), op.text(92, 706, "Invoice & Service Summary", 30, "F2", brand.white), op.text(92, 682, "Executive overview for client leadership", 11, "F1", "0.82 0.91 1"),
+    op.pill(420, 724, meta.invoiceNumber, brand.white, 140), op.text(430, 731, meta.invoiceNumber, 8.5, "F2", brand.blue, 28), op.pill(420, 690, `Invoice: ${invoices[0]?.status || "sent"}`, statusColor(invoices[0]?.status || "sent"), 140), op.pill(420, 658, `Payment: ${summary.billing.paymentStatus}`, statusColor(summary.billing.paymentStatus), 140),
+    card(38, 552, 126, 52, "Issue Date", meta.issueDate), card(174, 552, 126, 52, "Due Date", meta.dueDate, brand.orange), card(310, 552, 126, 52, "Client Company", summary.company.name), card(446, 552, 128, 52, "Contact Person", summary.company.contactPerson || order.user?.name || "Client"),
+    card(38, 486, 170, 52, "Package Name", summary.package.name, brand.green), card(220, 486, 126, 52, "Monthly Price", summary.package.price, brand.orange), card(358, 486, 104, 52, "Progress", `${progressValue}%`, brand.blue), card(474, 486, 100, 52, "Manager", order.assignedStaff || "ZMH Team", brand.green),
+    title(38, 446, "Executive KPI Dashboard"), miniCard(38, 366, 118, 54, "Current Package", summary.package.name), miniCard(166, 366, 112, 54, "Current Progress", `${progressValue}%`, brand.green), miniCard(288, 366, 112, 54, "Payment Status", summary.billing.paymentStatus, statusColor(summary.billing.paymentStatus)), miniCard(410, 366, 164, 54, "Outstanding Balance", `${meta.currency} ${meta.outstanding.toFixed(2)}`, brand.orange),
+    miniCard(38, 294, 162, 54, "Current Billing Cycle", `${meta.issueDate} - ${meta.dueDate}`), miniCard(210, 294, 142, 54, "Next Billing Date", formatDate(order.nextBillingDate), brand.orange), miniCard(362, 294, 100, 54, "Invoice Total", `${meta.currency} ${meta.total.toFixed(2)}`, brand.dark), miniCard(474, 294, 100, 54, "Paid", `${meta.currency} ${meta.amountPaid.toFixed(2)}`, brand.green),
+    op.rect(38, 126, 258, 134), op.text(56, 234, "Service Progress", 16, "F2"), op.progress(56, 202, 202, progressValue, brand.green), op.text(56, 178, `${progressValue}% complete across ${services.length} service line${services.length === 1 ? "" : "s"}`, 10, "F2", brand.muted, 68), op.text(56, 152, `Completed: ${completed.length || 0} | Remaining: ${remaining.length || 0}`, 10, "F2", brand.dark),
+    op.rect(316, 126, 258, 134), op.text(334, 234, "Circular Progress", 16, "F2"), ring(456, 184, progressValue), op.footer(1),
+  ].join("\n");
+
+  const invoiceRows = [["Subtotal", `${meta.currency} ${meta.subtotal.toFixed(2)}`], ["Discount", `${meta.currency} ${meta.discount.toFixed(2)}`], ["Tax", `${meta.currency} ${meta.tax.toFixed(2)}`], ["Total", `${meta.currency} ${meta.total.toFixed(2)}`], ["Paid", `${meta.currency} ${meta.amountPaid.toFixed(2)}`], ["Remaining", `${meta.currency} ${meta.outstanding.toFixed(2)}`], ["Payment Method", "Bank transfer"], ["Reference", meta.reference]];
+  const bankRows = [["Beneficiary", summary.accountDetails.beneficiaryName], ["Bank", summary.accountDetails.bankName], ["Account", summary.accountDetails.accountNumber], ["Routing", summary.accountDetails.routingNumber || "Provided on request"], ["SWIFT", summary.accountDetails.swiftCode || "Provided on request"], ["Reference", meta.reference]];
+  const page2 = [
+    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"), logo(36, 742), op.text(88, 760, "ZMH USA Corp", 13, "F2"), op.text(88, 744, meta.invoiceNumber, 9, "F2", brand.muted),
+    title(36, 730, "Operations Summary"), op.rect(36, 640, 264, 70), op.text(52, 686, summary.package.name, 18, "F2"), ...chunkText(summary.package.description || order.serviceUpdates || "Premium remote operations support configured for this client account.", 46).slice(0, 2).map((line, index) => op.text(52, 666 - index * 14, line, 8.5, "F1", brand.muted, 54)), op.text(224, 686, summary.package.price, 14, "F2", brand.orange),
+    op.text(36, 614, "Included Services", 12, "F2"), ...services.slice(0, 8).map((item, index) => chip(36 + (index % 2) * 134, 572 - Math.floor(index / 2) * 41, 124, item)),
+    op.text(36, 392, "Completed Services", 12, "F2"), ...(completed.length ? completed : ["Progress updates pending"]).slice(0, 4).map((item, index) => chip(36, 350 - index * 38, 124, item, brand.green, "0.92 0.99 0.96")),
+    op.text(174, 392, "Remaining Services", 12, "F2"), ...(remaining.length ? remaining : ["Scope under review"]).slice(0, 4).map((item, index) => chip(174, 350 - index * 38, 126, item, brand.orange, "1 0.96 0.90")),
+    op.text(36, 178, "Current Timeline", 12, "F2"), timeline(summary.timeline, 40, 150, 3),
+    op.rect(318, 632, 258, 96), op.text(336, 704, "Invoice Summary", 16, "F2"), ...invoiceRows.map(([label, value], index) => [op.line(336, 674 - index * 24 - 7, 552, 674 - index * 24 - 7), op.text(338, 674 - index * 24, label, 8, "F2", brand.muted, 28), op.text(462, 674 - index * 24, value, 8.5, "F2", index >= 3 ? brand.dark : brand.muted, 30)].join("\n")),
+    op.rect(318, 332, 258, 166), op.text(336, 474, "Bank Transfer Details", 16, "F2"), ...bankRows.map(([label, value], index) => [op.text(336, 446 - index * 22, label, 7.5, "F2", brand.muted, 18), op.text(416, 446 - index * 22, value || "Not provided", 8.5, "F2", brand.dark, 32)].join("\n")),
+    op.rect(318, 198, 124, 104), op.text(334, 278, "Support Contact", 13, "F2"), op.text(334, 254, "sales@zmhusacorp.com", 8.5, "F2", brand.blue, 28), op.text(334, 236, "support@zmhusacorp.com", 8.5, "F2", brand.blue, 28), op.text(334, 218, "Dashboard: zmhusacorp.com", 8.5, "F2", brand.muted, 30),
+    op.rect(456, 198, 120, 104), op.text(474, 278, "QR Code", 13, "F2"), qr(490, 218, `${meta.invoiceNumber}-${meta.reference}`), op.footer(2),
+  ].join("\n");
+
+  const page3 = needsAppendix ? [
+    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"), logo(36, 742), op.text(88, 760, "Appendix", 18, "F2"), op.text(88, 742, "History, notes, files, and recommendations", 9, "F2", brand.muted),
+    title(36, 704, "Admin Notes & Recommendations"), op.rect(36, 606, 540, 72), ...chunkText(summary.notes || "No admin notes recorded for this reporting cycle.", 96).slice(0, 3).map((line, index) => op.text(54, 654 - index * 16, line, 9, "F1", brand.muted, 100)),
+    title(36, 566, "Invoice History"), ...invoices.slice(0, 6).map((invoice, index) => [op.rect(36, 528 - index * 32 - 8, 260, 24, index % 2 ? "0.98 0.99 1" : brand.white), op.text(48, 528 - index * 32, invoice.invoice, 8.5, "F2"), op.text(150, 528 - index * 32, `${invoice.currency} ${Number(invoice.amount || 0).toFixed(2)}`, 8.5, "F2", brand.orange), op.text(236, 528 - index * 32, invoice.status, 8.5, "F2", statusColor(invoice.status))].join("\n")),
+    title(320, 566, "Activity Log"), ...summary.timeline.slice(0, 6).map((item, index) => [op.rect(320, 528 - index * 32 - 8, 256, 24, index % 2 ? "0.98 0.99 1" : brand.white), op.text(332, 528 - index * 32, item.title, 8.5, "F2", brand.dark, 36), op.text(494, 528 - index * 32, `${item.progressPercent || 0}%`, 8.5, "F2", statusColor(item.status))].join("\n")),
+    title(36, 280, "Files Shared"), ...(files.length ? files : [{ name: "No shared files this cycle", uploadedAt: null }]).slice(0, 5).map((file, index) => op.text(54, 248 - index * 20, `${file.name || "File"} | ${formatDate(file.uploadedAt)}`, 9, "F2", brand.muted, 82)),
+    title(320, 280, "Future Roadmap"), ...remaining.slice(0, 5).map((item, index) => chip(320, 236 - index * 34, 236, item, brand.orange, "1 0.96 0.90")),
+    op.text(36, 78, "Terms: Payment is due by the listed due date. Please include the reference number with bank transfers.", 8.5, "F1", brand.muted, 112), op.footer(3),
+  ].join("\n") : null;
+
+  const contents = page3 ? [page1, page2, page3] : [page1, page2];
+  const pageObjectStart = 6;
+  const contentObjectStart = pageObjectStart + contents.length;
+  const pageRefs = contents.map((_, index) => `${pageObjectStart + index} 0 R`).join(" ");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${pageRefs}] /Count ${contents.length} >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+    ...contents.map((_, index) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents ${contentObjectStart + index} 0 R >>`),
+    ...contents.map((content) => `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`),
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(pdf);
+}
+
+function buildExecutiveSummaryEmail(order, summary) {
+  const meta = invoiceMeta(order, summary);
+  const subject = `ZMH USA Corp | Executive Invoice Summary | ${order.companyName} | ${meta.invoiceNumber}`;
+  const progress = Math.max(0, Math.min(100, Number(summary.currentProgress) || 0));
+  const amount = `${meta.currency} ${meta.total.toFixed(2)}`;
+  const html = `
+    <div style="margin:0;padding:0;background:#eef4ff;font-family:Inter,Segoe UI,Arial,sans-serif;color:#172033">
+      <div style="max-width:720px;margin:0 auto;padding:28px">
+        <div style="background:linear-gradient(135deg,#0f172a,#0b5fff 62%,#16c47f);color:white;border-radius:24px 24px 0 0;padding:34px">
+          <div style="display:inline-flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:16px;background:rgba(255,255,255,.18);font-size:24px;font-weight:900">Z</div>
+          <h1 style="margin:20px 0 8px;font-size:30px;line-height:1.12">Executive Invoice & Service Summary</h1>
+          <p style="margin:0;color:#eaf1ff;font-size:15px">A premium PDF report is attached for ${escapeHtml(order.companyName)}.</p>
+        </div>
+        <div style="background:white;border:1px solid #dce3ee;border-top:0;border-radius:0 0 24px 24px;padding:28px">
+          <p style="margin:0 0 18px;color:#667085;line-height:1.7">Your attached document combines invoice status, service delivery progress, banking details, and operational updates into a concise executive report.</p>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:22px 0">
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Invoice Number</strong><span style="display:block;margin-top:6px;font-size:20px;font-weight:900">${escapeHtml(meta.invoiceNumber)}</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Amount</strong><span style="display:block;margin-top:6px;font-size:20px;font-weight:900;color:#f97316">${escapeHtml(amount)}</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Package</strong><span style="display:block;margin-top:6px;font-size:18px;font-weight:900">${escapeHtml(summary.package.name)}</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Payment Status</strong><span style="display:block;margin-top:6px;font-size:18px;font-weight:900;color:#0b5fff">${escapeHtml(summary.billing.paymentStatus)}</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Progress</strong><span style="display:block;margin-top:6px;font-size:18px;font-weight:900;color:#16c47f">${progress}% complete</span></div>
+            <div style="padding:16px;border:1px solid #edf1f7;border-radius:16px;background:#f8fbff"><strong style="display:block;color:#667085;font-size:12px;text-transform:uppercase">Next Billing</strong><span style="display:block;margin-top:6px;font-size:18px;font-weight:900">${escapeHtml(formatDate(order.nextBillingDate))}</span></div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin:24px 0">
+            <a href="https://zmhusacorp.com/user-dashboard" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#0b5fff;color:white;text-decoration:none;font-weight:800">View Dashboard</a>
+            <a href="https://zmhusacorp.com/invoices" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#eef4ff;color:#0b5fff;text-decoration:none;font-weight:800">Download Invoice</a>
+            <a href="https://zmhusacorp.com/book-meeting" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#eef4ff;color:#0b5fff;text-decoration:none;font-weight:800">Book Meeting</a>
+            <a href="mailto:support@zmhusacorp.com" style="display:inline-block;padding:12px 16px;border-radius:12px;background:#eef4ff;color:#0b5fff;text-decoration:none;font-weight:800">Contact Support</a>
+          </div>
+          <div style="margin-top:24px;padding-top:16px;border-top:1px solid #edf1f7;color:#667085;font-size:13px">ZMH USA Corp | sales@zmhusacorp.com | zmhusacorp.com</div>
+        </div>
+      </div>
+    </div>`;
+  const text = `Invoice ${meta.invoiceNumber}. Package: ${summary.package.name}. Amount: ${amount}. Payment: ${summary.billing.paymentStatus}. Progress: ${progress}%. Next billing: ${formatDate(order.nextBillingDate)}.`;
+  return { subject, html, text };
+}
+
 function buildSummaryEmail(order, summary) {
   const meta = invoiceMeta(order, summary);
   const subject = `ZMH USA Corp | Invoice & Service Summary | ${order.companyName} | ${meta.invoiceNumber}`;
@@ -364,6 +522,112 @@ function buildSummaryEmail(order, summary) {
       </div>
     </div>`;
   const text = `Hi ${summary.company.contactPerson || order.companyName}, your ZMH invoice and service summary PDF is attached. Invoice: ${meta.invoiceNumber}. Package: ${summary.package.name}. Progress: ${progress}%. Outstanding: ${outstanding}.`;
+  return { subject, html, text };
+}
+
+function paymentPdfBuffer(invoice, payment, user) {
+  const text = (x, y, value, size = 10, font = "F1", color = "0.10 0.14 0.22") => `BT /${font} ${size} Tf ${color} rg ${x} ${y} Td (${pdfEscape(value)}) Tj ET`;
+  const rect = (x, y, w, h, color = "1 1 1") => `${color} rg ${x} ${y} ${w} ${h} re f`;
+  const rows = [
+    ["Invoice", invoice.invoice],
+    ["Status", "Paid"],
+    ["Client", user?.name || invoice.company],
+    ["Company", invoice.company],
+    ["Amount Received", `${invoice.currency} ${Number(invoice.amount || 0).toFixed(2)}`],
+    ["Payment Date", formatDate(payment.paymentDate)],
+    ["Transaction ID", payment.transactionId],
+    ["Next Billing", "Shown in your client dashboard"],
+  ];
+  const content = [
+    rect(0, 0, 612, 792, "0.97 0.98 1"),
+    rect(0, 642, 612, 150, "0.04 0.11 0.24"),
+    text(48, 716, "ZMH USA Corp", 26, "F2", "1 1 1"),
+    text(48, 684, "Paid Invoice Confirmation", 20, "F2", "0.82 0.91 1"),
+    rect(48, 500, 516, 112),
+    ...rows.map(([label, value], index) => {
+      const x = index % 2 ? 316 : 72;
+      const y = 578 - Math.floor(index / 2) * 42;
+      return [text(x, y, label, 8, "F2", "0.40 0.45 0.54"), text(x, y - 16, value, 11, "F2")].join("\n");
+    }),
+    rect(348, 328, 216, 72, "0.04 0.11 0.24"),
+    text(370, 370, "Amount Paid", 11, "F1", "0.82 0.91 1"),
+    text(370, 344, `${invoice.currency} ${Number(invoice.amount || 0).toFixed(2)}`, 22, "F2", "1 1 1"),
+    text(48, 252, "Thank you for your payment. Your account has been updated and this invoice is now marked paid.", 12, "F1", "0.38 0.43 0.51"),
+    text(48, 52, "ZMH USA Corp | support@zmhusacorp.com | sales@zmhusacorp.com", 9, "F1", "0.40 0.45 0.54"),
+  ].join("\n");
+  const stream = Buffer.from(content, "latin1");
+  const objects = [
+    "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+    "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >> endobj",
+    "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj",
+    "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj",
+    `6 0 obj << /Length ${stream.length} >> stream\n${content}\nendstream endobj`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object) => {
+    offsets.push(Buffer.byteLength(pdf, "latin1"));
+    pdf += `${object}\n`;
+  });
+  const xref = Buffer.byteLength(pdf, "latin1");
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => { pdf += `${String(offset).padStart(10, "0")} 00000 n \n`; });
+  pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(pdf, "latin1");
+}
+
+function paymentApprovalEmail(payment) {
+  const user = payment.user;
+  const invoice = payment.invoice;
+  const order = payment.order;
+  const amount = `${invoice.currency} ${Number(invoice.amount || payment.amount || 0).toFixed(2)}`;
+  const subject = "Payment Received - Thank You";
+  const html = `
+    <div style="margin:0;background:#f4f7fb;padding:28px;font-family:Inter,Arial,sans-serif;color:#172033">
+      <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #e7edf6;border-radius:22px;overflow:hidden">
+        <div style="padding:28px;background:#0f172a;color:white">
+          <div style="font-weight:900;font-size:22px">ZMH USA Corp</div>
+          <p style="margin:8px 0 0;color:#d8e6ff">Payment received and verified</p>
+        </div>
+        <div style="padding:28px">
+          <h2 style="margin:0 0 12px">Thank you, ${escapeHtml(user.name)}</h2>
+          <p style="line-height:1.7;color:#667085">We have verified your payment and updated your invoice status to paid.</p>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+            <div style="padding:14px;border:1px solid #edf1f7;border-radius:14px"><strong>Package</strong><br />${escapeHtml(order?.packageName || "ZMH Services")}</div>
+            <div style="padding:14px;border:1px solid #edf1f7;border-radius:14px"><strong>Invoice</strong><br />${escapeHtml(invoice.invoice)}</div>
+            <div style="padding:14px;border:1px solid #edf1f7;border-radius:14px"><strong>Amount Received</strong><br />${amount}</div>
+            <div style="padding:14px;border:1px solid #edf1f7;border-radius:14px"><strong>Payment Date</strong><br />${formatDate(payment.paymentDate)}</div>
+            <div style="padding:14px;border:1px solid #edf1f7;border-radius:14px"><strong>Transaction ID</strong><br />${escapeHtml(payment.transactionId)}</div>
+            <div style="padding:14px;border:1px solid #edf1f7;border-radius:14px"><strong>Next Billing</strong><br />${formatDate(order?.nextBillingDate)}</div>
+          </div>
+          <p style="line-height:1.7;color:#667085">If you need help, contact support@zmhusacorp.com.</p>
+        </div>
+        <div style="padding:18px 28px;background:#f8fbff;color:#667085;font-size:13px">ZMH USA Corp | Premium remote operations support</div>
+      </div>
+    </div>`;
+  const text = `Payment received. Invoice: ${invoice.invoice}. Amount: ${amount}. Transaction: ${payment.transactionId}.`;
+  return { subject, html, text };
+}
+
+function paymentRejectedEmail(payment, reason) {
+  const user = payment.user;
+  const invoice = payment.invoice;
+  const subject = "Payment could not be verified";
+  const html = `
+    <div style="margin:0;background:#f4f7fb;padding:28px;font-family:Inter,Arial,sans-serif;color:#172033">
+      <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #e7edf6;border-radius:22px;overflow:hidden">
+        <div style="padding:28px;background:#0f172a;color:white"><div style="font-weight:900;font-size:22px">ZMH USA Corp</div><p style="margin:8px 0 0;color:#d8e6ff">Payment verification update</p></div>
+        <div style="padding:28px">
+          <h2 style="margin:0 0 12px">Hi ${escapeHtml(user.name)},</h2>
+          <p style="line-height:1.7;color:#667085">We could not verify the payment submitted for invoice <strong>${escapeHtml(invoice.invoice)}</strong>.</p>
+          <div style="padding:16px;border-radius:14px;background:#fff4f4;border:1px solid #ffd7d7"><strong>Reason</strong><br />${escapeHtml(reason || "The submitted payment details could not be matched.")}</div>
+          <p style="line-height:1.7;color:#667085">Please review the bank transfer details, then resubmit your payment reference from your dashboard. Contact support@zmhusacorp.com if you need help.</p>
+        </div>
+        <div style="padding:18px 28px;background:#f8fbff;color:#667085;font-size:13px">ZMH USA Corp | support@zmhusacorp.com</div>
+      </div>
+    </div>`;
+  const text = `Payment could not be verified for invoice ${invoice.invoice}. Reason: ${reason || "Could not be matched."} Please resubmit from your dashboard.`;
   return { subject, html, text };
 }
 
@@ -641,7 +905,7 @@ router.post("/orders/:id/pdf", asyncHandler(async (req, res) => {
     throw error;
   }
   const summary = await buildOrderSummary(order);
-  const pdf = createSummaryPdfBuffer(order, summary);
+  const pdf = createExecutiveSummaryPdfBuffer(order, summary);
   res.json({
     ok: true,
     filename: `ZMH-${order._id}-summary.pdf`,
@@ -676,8 +940,8 @@ router.post("/orders/:id/send-invoice-summary", asyncHandler(async (req, res) =>
     throw error;
   }
   const summary = await buildOrderSummary(order);
-  const pdf = createSummaryPdfBuffer(order, summary);
-  const email = buildSummaryEmail(order, summary);
+  const pdf = createExecutiveSummaryPdfBuffer(order, summary);
+  const email = buildExecutiveSummaryEmail(order, summary);
   const history = new EmailHistory({
     order: order._id,
     to,
@@ -792,6 +1056,116 @@ router.patch("/bills/:id", asyncHandler(async (req, res) => {
   }
   const bill = await Invoice.findByIdAndUpdate(req.params.id, update, { new: true });
   res.json({ ok: true, bill });
+}));
+
+router.get("/payments", asyncHandler(async (_req, res) => {
+  const payments = await PaymentSubmission.find()
+    .populate("user", "name email company phone")
+    .populate("order", "companyName packageName packagePrice nextBillingDate paymentStatus")
+    .populate("invoice")
+    .sort({ createdAt: -1 });
+  res.json({ ok: true, payments });
+}));
+
+router.post("/payments/:id/approve", asyncHandler(async (req, res) => {
+  const payment = await PaymentSubmission.findById(req.params.id).populate("user", "name email company").populate("order").populate("invoice");
+  if (!payment) {
+    const error = new Error("Payment submission not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (payment.status !== "submitted") {
+    const error = new Error("This payment has already been reviewed.");
+    error.statusCode = 409;
+    throw error;
+  }
+  payment.status = "approved";
+  payment.reviewedBy = req.user._id;
+  payment.reviewedAt = new Date();
+  payment.reviewReason = cleanString(req.body?.note || "Verified by admin");
+  await payment.save();
+
+  const invoice = await Invoice.findByIdAndUpdate(payment.invoice._id, { status: "paid" }, { new: true });
+  let order = payment.order;
+  if (order?._id) {
+    order.paymentStatus = "paid";
+    await order.save();
+  } else {
+    order = await Booking.findOneAndUpdate({ user: payment.user._id, companyName: payment.invoice.company }, { paymentStatus: "paid" }, { new: true });
+  }
+  await Notification.create({
+    user: payment.user._id,
+    title: "Payment approved",
+    body: `Your payment for ${payment.invoice.invoice} has been verified. Thank you.`,
+    type: "billing",
+  });
+
+  const refreshed = await PaymentSubmission.findById(payment._id).populate("user", "name email company").populate("order").populate("invoice");
+  const email = paymentApprovalEmail(refreshed);
+  let emailSent = false;
+  try {
+    const pdf = paymentPdfBuffer(invoice, refreshed, refreshed.user);
+    const result = await sendEmail({
+      to: refreshed.user.email,
+      from: "ZMH USA Corp <sales@zmhusacorp.com>",
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+      attachments: [{ filename: `${invoice.invoice}-paid.pdf`, content: pdf.toString("base64"), contentType: "application/pdf" }],
+    });
+    emailSent = !result?.skipped;
+  } catch (error) {
+    console.error("[payment approval email failed]", error.message);
+  }
+  res.json({ ok: true, payment: refreshed, invoice, order, emailSent });
+}));
+
+router.post("/payments/:id/reject", asyncHandler(async (req, res) => {
+  const payment = await PaymentSubmission.findById(req.params.id).populate("user", "name email company").populate("order").populate("invoice");
+  if (!payment) {
+    const error = new Error("Payment submission not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (payment.status !== "submitted") {
+    const error = new Error("This payment has already been reviewed.");
+    error.statusCode = 409;
+    throw error;
+  }
+  const reason = cleanString(req.body?.reason, "Payment could not be verified against the bank transfer record.");
+  payment.status = "rejected";
+  payment.reviewedBy = req.user._id;
+  payment.reviewedAt = new Date();
+  payment.reviewReason = reason;
+  await payment.save();
+  let order = payment.order;
+  if (order?._id) {
+    order.paymentStatus = "payment rejected";
+    await order.save();
+  }
+  await Notification.create({
+    user: payment.user._id,
+    title: "Payment rejected",
+    body: `Your payment for ${payment.invoice.invoice} could not be verified. Please resubmit with the correct details.`,
+    type: "billing",
+  });
+
+  const refreshed = await PaymentSubmission.findById(payment._id).populate("user", "name email company").populate("order").populate("invoice");
+  const email = paymentRejectedEmail(refreshed, reason);
+  let emailSent = false;
+  try {
+    const result = await sendEmail({
+      to: refreshed.user.email,
+      from: "ZMH USA Corp <sales@zmhusacorp.com>",
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+    });
+    emailSent = !result?.skipped;
+  } catch (error) {
+    console.error("[payment rejection email failed]", error.message);
+  }
+  res.json({ ok: true, payment: refreshed, order, emailSent });
 }));
 
 router.post("/settings", asyncHandler(async (req, res) => {
