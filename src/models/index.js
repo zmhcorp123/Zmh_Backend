@@ -35,11 +35,13 @@ const bookingSchema = new mongoose.Schema({
   crm: { type: String, trim: true, default: "" },
   integrationNotes: { type: String, trim: true, default: "" },
   requestedDate: { type: Date, default: null },
-  status: { type: String, enum: ["new", "needs review", "confirmed", "ongoing", "completed", "cancelled"], default: "new" },
+  status: { type: String, enum: ["new", "needs discussion", "ongoing", "cancelled"], default: "new" },
   notes: { type: String, trim: true, default: "" },
   adminResponse: { type: String, trim: true, default: "" },
   respondedAt: { type: Date, default: null },
   respondedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  activeServices: [{ type: String, trim: true }],
+  serviceUpdates: { type: String, trim: true, default: "" },
 }, { timestamps: true });
 
 const contactSchema = new mongoose.Schema({
@@ -60,6 +62,17 @@ const invoiceSchema = new mongoose.Schema({
   status: { type: String, enum: ["draft", "sent", "paid", "overdue", "void"], default: "draft" },
   dueDate: { type: Date, default: null },
   lineItems: [{ label: String, amount: Number }],
+  message: { type: String, trim: true, default: "" },
+}, { timestamps: true });
+
+const supportTicketSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  subject: { type: String, trim: true, required: true },
+  message: { type: String, trim: true, required: true },
+  status: { type: String, enum: ["open", "in review", "resolved"], default: "open" },
+  adminResponse: { type: String, trim: true, default: "" },
+  resolvedAt: { type: Date, default: null },
+  resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 }, { timestamps: true });
 
 const notificationSchema = new mongoose.Schema({
@@ -82,6 +95,7 @@ module.exports = {
   Booking: mongoose.model("Booking", bookingSchema),
   Contact: mongoose.model("Contact", contactSchema),
   Invoice: mongoose.model("Invoice", invoiceSchema),
+  SupportTicket: mongoose.model("SupportTicket", supportTicketSchema),
   Notification: mongoose.model("Notification", notificationSchema),
   Setting: mongoose.model("Setting", settingSchema),
 };

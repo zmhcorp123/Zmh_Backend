@@ -1,5 +1,5 @@
 const express = require("express");
-const { Booking, Invoice, Notification, Setting, User } = require("../models");
+const { Booking, Invoice, Notification, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { asyncHandler } = require("../utils/asyncHandler");
@@ -17,10 +17,17 @@ async function sendBookingDecisionEmail(booking) {
   if (!to) return false;
 
   const isCancelled = booking.status === "cancelled";
-  const subject = isCancelled ? "Your ZMH booking request was cancelled" : "Your ZMH booking request was confirmed";
+  const isDiscussion = booking.status === "needs discussion";
+  const subject = isCancelled
+    ? "Your ZMH booking request was cancelled"
+    : isDiscussion
+      ? "Your ZMH booking request needs discussion"
+      : "Your ZMH booking request was accepted";
   const response = booking.adminResponse || (isCancelled
     ? "Your booking request has been cancelled by the admin team."
-    : "Your booking request has been confirmed by the admin team.");
+    : isDiscussion
+      ? "Your booking request needs a discussion with our team before it can move forward."
+      : "Your booking request has been accepted by the admin team.");
 
   try {
     await sendEmail({
@@ -136,7 +143,7 @@ router.get("/bookings", asyncHandler(async (_req, res) => {
 }));
 
 router.patch("/bookings/:id", asyncHandler(async (req, res) => {
-  const allowed = ["status", "notes", "services", "hours", "afterHours", "crm", "integrationNotes", "requestedDate", "adminResponse"];
+  const allowed = ["status", "notes", "services", "hours", "afterHours", "crm", "integrationNotes", "requestedDate", "adminResponse", "activeServices", "serviceUpdates"];
   const update = {};
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(req.body, key)) update[key] = req.body[key];
@@ -148,7 +155,11 @@ router.patch("/bookings/:id", asyncHandler(async (req, res) => {
     update.respondedAt = new Date();
     update.respondedBy = req.user._id;
   }
-  if (update.status === "confirmed") update.status = "ongoing";
+  if (update.status === "accepted") update.status = "ongoing";
+  if (update.status === "needs review") update.status = "needs discussion";
+  if (Object.prototype.hasOwnProperty.call(update, "activeServices") && !Array.isArray(update.activeServices)) {
+    update.activeServices = String(update.activeServices).split("\n").map((item) => item.trim()).filter(Boolean);
+  }
   const booking = await Booking.findByIdAndUpdate(req.params.id, update, { new: true }).populate("user", "name email company");
   let emailSent = false;
   if (booking?.user?._id && (update.adminResponse || update.status)) {
@@ -159,7 +170,7 @@ router.patch("/bookings/:id", asyncHandler(async (req, res) => {
       type: "booking",
     });
   }
-  if (booking && ["ongoing", "cancelled"].includes(booking.status) && (update.adminResponse || update.status)) {
+  if (booking && ["ongoing", "cancelled", "needs discussion"].includes(booking.status) && (update.adminResponse || update.status)) {
     emailSent = await sendBookingDecisionEmail(booking);
   }
   res.json({ ok: true, booking, emailSent });
@@ -173,6 +184,71 @@ router.get("/settings", asyncHandler(async (_req, res) => {
 router.get("/bills", asyncHandler(async (_req, res) => {
   const bills = await Invoice.find().populate("user", "name email company").sort({ createdAt: -1 });
   res.json({ ok: true, bills });
+}));
+
+async function emailBill(user, invoice) {
+  if (!user?.email) return false;
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: `ZMH invoice ${invoice.invoice}`,
+      text: `Hi ${user.name},\n\nA new bill has been sent to your ZMH account.\n\nInvoice: ${invoice.invoice}\nAmount: ${invoice.currency} ${invoice.amount}\nDue date: ${invoice.dueDate ? invoice.dueDate.toDateString() : "Not selected"}\n${invoice.message || ""}`,
+      html: `
+        <p>Hi ${user.name},</p>
+        <p>A new bill has been sent to your ZMH account.</p>
+        <ul>
+          <li><strong>Invoice:</strong> ${invoice.invoice}</li>
+          <li><strong>Amount:</strong> ${invoice.currency} ${invoice.amount}</li>
+          <li><strong>Due date:</strong> ${invoice.dueDate ? invoice.dueDate.toDateString() : "Not selected"}</li>
+        </ul>
+        ${invoice.message ? `<p>${invoice.message}</p>` : ""}
+      `,
+    });
+    return true;
+  } catch (error) {
+    console.error("[bill email failed]", error.message);
+    return false;
+  }
+}
+
+router.post("/bills/send", asyncHandler(async (req, res) => {
+  const { scope = "individual", userId, userIds = [], amount = 0, currency = "USD", dueDate, lineItems = [], message = "" } = req.body || {};
+  let users = [];
+
+  if (scope === "all") {
+    users = await User.find({ role: { $ne: "admin" }, status: "active" }).select("-passwordHash");
+  } else if (scope === "custom") {
+    users = await User.find({ _id: { $in: userIds } }).select("-passwordHash");
+  } else if (userId) {
+    const user = await User.findById(userId).select("-passwordHash");
+    if (user) users = [user];
+  }
+
+  if (!users.length) {
+    const error = new Error("Select at least one user to send a bill.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const invoices = [];
+  let emailsSent = 0;
+  for (const user of users) {
+    const invoice = await Invoice.create({
+      user: user._id,
+      invoice: `ZMH-${Date.now()}-${String(user._id).slice(-4)}`,
+      company: user.company || user.name,
+      amount: Number(amount) || 0,
+      currency,
+      status: "sent",
+      dueDate: dueDate ? new Date(dueDate) : null,
+      lineItems,
+      message,
+    });
+    invoices.push(invoice);
+    if (await emailBill(user, invoice)) emailsSent += 1;
+  }
+
+  res.status(201).json({ ok: true, bills: invoices, emailsSent });
 }));
 
 router.patch("/bills/:id", asyncHandler(async (req, res) => {
@@ -197,6 +273,37 @@ router.post("/settings", asyncHandler(async (req, res) => {
     saved.push(setting);
   }
   res.json({ ok: true, settings: saved });
+}));
+
+router.get("/support-tickets", asyncHandler(async (_req, res) => {
+  const tickets = await SupportTicket.find().populate("user", "name email company phone").sort({ createdAt: -1 });
+  res.json({ ok: true, tickets });
+}));
+
+router.patch("/support-tickets/:id", asyncHandler(async (req, res) => {
+  const update = {};
+  if (Object.prototype.hasOwnProperty.call(req.body, "status")) update.status = req.body.status;
+  if (Object.prototype.hasOwnProperty.call(req.body, "adminResponse")) update.adminResponse = req.body.adminResponse;
+  if (update.status === "resolved") {
+    update.resolvedAt = new Date();
+    update.resolvedBy = req.user._id;
+  }
+
+  const ticket = await SupportTicket.findByIdAndUpdate(req.params.id, update, { new: true }).populate("user", "name email company phone");
+  if (!ticket) {
+    const error = new Error("Support ticket not found");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  await Notification.create({
+    user: ticket.user._id,
+    title: update.status === "resolved" ? "Support ticket resolved" : "Support ticket updated",
+    body: ticket.adminResponse || `Your ticket status is now ${ticket.status}.`,
+    type: "support",
+  });
+
+  res.json({ ok: true, ticket });
 }));
 
 module.exports = router;
