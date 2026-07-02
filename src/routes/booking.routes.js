@@ -38,10 +38,14 @@ function bookingSummary(booking) {
   ].join("\n");
 }
 
+function inquiryRecipients() {
+  return process.env.CONTACT_TO_EMAIL || process.env.SUPPORT_EMAIL || "support@zmhusacorp.com";
+}
+
 async function notifySalesOfBooking(booking, user) {
   try {
     await sendEmail({
-      to: process.env.SALES_EMAIL || "sales@zmhusacorp.com",
+      to: [process.env.SALES_EMAIL || "sales@zmhusacorp.com", inquiryRecipients()],
       subject: `New booking request from ${booking.companyName}`,
       text: `A new booking request was submitted.\n\n${bookingSummary(booking)}\n\nUser account: ${user?.email || "Public visitor"}`,
       html: `

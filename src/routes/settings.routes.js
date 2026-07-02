@@ -48,4 +48,9 @@ router.get("/packages", asyncHandler(async (_req, res) => {
   res.json({ ok: true, packages });
 }));
 
+router.get("/company", asyncHandler(async (_req, res) => {
+  const setting = await Setting.findOne({ key: "companyDetails" });
+  res.json({ ok: true, companyDetails: setting?.value || {} });
+}));
+
 module.exports = router;

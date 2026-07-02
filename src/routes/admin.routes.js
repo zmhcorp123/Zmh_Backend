@@ -945,13 +945,13 @@ router.post("/orders/:id/send-invoice-summary", asyncHandler(async (req, res) =>
   const history = new EmailHistory({
     order: order._id,
     to,
-    from: "sales@zmhusacorp.com",
+    from: "billing@zmhusacorp.com",
     subject: email.subject,
   });
   try {
     const result = await sendEmail({
       to,
-      from: "ZMH USA Corp <sales@zmhusacorp.com>",
+      from: "ZMH USA Corp Billing <billing@zmhusacorp.com>",
       subject: email.subject,
       html: email.html,
       text: email.text,
@@ -988,6 +988,7 @@ async function emailBill(user, invoice) {
   try {
     await sendEmail({
       to: user.email,
+      from: "ZMH USA Corp Billing <billing@zmhusacorp.com>",
       subject: `ZMH invoice ${invoice.invoice}`,
       text: `Hi ${user.name},\n\nA new bill has been sent to your ZMH account.\n\nInvoice: ${invoice.invoice}\nAmount: ${invoice.currency} ${invoice.amount}\nDue date: ${invoice.dueDate ? invoice.dueDate.toDateString() : "Not selected"}\n${invoice.message || ""}`,
       html: `
@@ -1107,7 +1108,7 @@ router.post("/payments/:id/approve", asyncHandler(async (req, res) => {
     const pdf = paymentPdfBuffer(invoice, refreshed, refreshed.user);
     const result = await sendEmail({
       to: refreshed.user.email,
-      from: "ZMH USA Corp <sales@zmhusacorp.com>",
+      from: "ZMH USA Corp Billing <billing@zmhusacorp.com>",
       subject: email.subject,
       html: email.html,
       text: email.text,
@@ -1156,7 +1157,7 @@ router.post("/payments/:id/reject", asyncHandler(async (req, res) => {
   try {
     const result = await sendEmail({
       to: refreshed.user.email,
-      from: "ZMH USA Corp <sales@zmhusacorp.com>",
+      from: "ZMH USA Corp Accounts <accounts@zmhusacorp.com>",
       subject: email.subject,
       html: email.html,
       text: email.text,

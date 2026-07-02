@@ -243,7 +243,8 @@ router.post("/payments/submit", requireAuth, asyncHandler(async (req, res) => {
   });
   try {
     await sendEmail({
-      to: process.env.SALES_EMAIL || "sales@zmhusacorp.com",
+      to: process.env.ACCOUNTS_EMAIL || "accounts@zmhusacorp.com",
+      from: "ZMH USA Corp Accounts <accounts@zmhusacorp.com>",
       subject: `Payment submitted: ${invoice.invoice}`,
       text: `${req.user.name} submitted payment proof for ${invoice.invoice}. Transaction: ${transactionId}.`,
       html: `<p><strong>${req.user.name}</strong> submitted payment proof for <strong>${invoice.invoice}</strong>.</p><p>Method: ${paymentMethod}<br />Transaction: ${transactionId}<br />Amount: ${invoice.currency} ${invoice.amount}</p>`,
