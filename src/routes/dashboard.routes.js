@@ -1,5 +1,5 @@
 const express = require("express");
-const { Invoice, Notification, Booking, OrderProgress, PaymentSubmission, Setting, SupportTicket } = require("../models");
+const { Invoice, Notification, Booking, OrderProgress, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { requireAuth } = require("../middleware/auth");
@@ -109,6 +109,37 @@ router.get("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
   const notifications = await Notification.countDocuments({ user: req.user._id, readAt: null });
   const tickets = await SupportTicket.countDocuments({ user: req.user._id });
   res.json({ ok: true, user: publicUser(req.user), stats: { bookings, invoices, notifications, tickets } });
+}));
+
+router.patch("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
+  const allowed = ["name", "username", "company", "phone", "profilePicture"];
+  const update = {};
+
+  for (const field of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(req.body, field)) continue;
+    update[field] = String(req.body[field] ?? "").trim();
+  }
+
+  if (Object.prototype.hasOwnProperty.call(update, "name") && !update.name) {
+    const error = new Error("Full name is required");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (update.phone && !/^[+()\-\s\d.]{7,24}$/.test(update.phone)) {
+    const error = new Error("Enter a valid phone number");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (update.profilePicture && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(update.profilePicture) && !/^https?:\/\//i.test(update.profilePicture)) {
+    const error = new Error("Profile picture must be an image upload or valid URL");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const user = await User.findByIdAndUpdate(req.user._id, update, { new: true, runValidators: true }).select("-passwordHash");
+  res.json({ ok: true, user: publicUser(user), message: "Profile updated." });
 }));
 
 router.get("/invoices", requireAuth, asyncHandler(async (req, res) => {
