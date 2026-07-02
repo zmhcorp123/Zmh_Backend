@@ -156,16 +156,25 @@ const paymentSubmissionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 paymentSubmissionSchema.index({ invoice: 1, status: 1 });
+paymentSubmissionSchema.index({ user: 1, invoice: 1, status: 1 });
 
 const supportTicketSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   subject: { type: String, trim: true, required: true },
   message: { type: String, trim: true, required: true },
-  status: { type: String, enum: ["open", "in review", "resolved"], default: "open" },
+  status: { type: String, enum: ["open", "in progress", "resolved"], default: "open", index: true },
   adminResponse: { type: String, trim: true, default: "" },
+  replies: [{
+    message: { type: String, trim: true, required: true },
+    admin: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    adminName: { type: String, trim: true, default: "" },
+    createdAt: { type: Date, default: Date.now },
+  }],
   resolvedAt: { type: Date, default: null },
   resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 }, { timestamps: true });
+
+supportTicketSchema.index({ user: 1, createdAt: -1 });
 
 const notificationSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
@@ -181,6 +190,14 @@ const settingSchema = new mongoose.Schema({
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 }, { timestamps: true });
 
+const approvalLogSchema = new mongoose.Schema({
+  admin: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  payment: { type: mongoose.Schema.Types.ObjectId, ref: "PaymentSubmission", default: null, index: true },
+  invoice: { type: mongoose.Schema.Types.ObjectId, ref: "Invoice", default: null },
+  action: { type: String, enum: ["approved", "rejected"], required: true },
+  reason: { type: String, trim: true, default: "" },
+}, { timestamps: true });
+
 module.exports = {
   User: mongoose.model("User", userSchema),
   Otp: mongoose.model("Otp", otpSchema),
@@ -193,5 +210,6 @@ module.exports = {
   PackagePricing: mongoose.model("PackagePricing", packagePricingSchema),
   EmailHistory: mongoose.model("EmailHistory", emailHistorySchema),
   PaymentSubmission: mongoose.model("PaymentSubmission", paymentSubmissionSchema),
+  ApprovalLog: mongoose.model("ApprovalLog", approvalLogSchema),
   Setting: mongoose.model("Setting", settingSchema),
 };

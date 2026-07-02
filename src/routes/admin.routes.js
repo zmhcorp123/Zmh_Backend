@@ -1,5 +1,5 @@
 const express = require("express");
-const { Booking, EmailHistory, Invoice, Notification, OrderProgress, PackagePricing, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
+const { ApprovalLog, Booking, EmailHistory, Invoice, Notification, OrderProgress, PackagePricing, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { asyncHandler } = require("../utils/asyncHandler");
@@ -1085,6 +1085,13 @@ router.post("/payments/:id/approve", asyncHandler(async (req, res) => {
   payment.reviewedAt = new Date();
   payment.reviewReason = cleanString(req.body?.note || "Verified by admin");
   await payment.save();
+  await ApprovalLog.create({
+    admin: req.user._id,
+    payment: payment._id,
+    invoice: payment.invoice._id,
+    action: "approved",
+    reason: payment.reviewReason,
+  });
 
   const invoice = await Invoice.findByIdAndUpdate(payment.invoice._id, { status: "paid" }, { new: true });
   let order = payment.order;
@@ -1102,7 +1109,11 @@ router.post("/payments/:id/approve", asyncHandler(async (req, res) => {
   });
 
   const refreshed = await PaymentSubmission.findById(payment._id).populate("user", "name email company").populate("order").populate("invoice");
-  const email = paymentApprovalEmail(refreshed);
+  const email = {
+    subject: "Payment Confirmation Approved",
+    text: `Hello ${refreshed.user.name},\n\nYour payment for Invoice #${refreshed.invoice.invoice} has been successfully verified and approved.\n\nThank you for your payment.\n\nRegards,\nSupport Team`,
+    html: `<p>Hello ${escapeHtml(refreshed.user.name)},</p><p>Your payment for Invoice #${escapeHtml(refreshed.invoice.invoice)} has been successfully verified and approved.</p><p>Thank you for your payment.</p><p>Regards,<br />Support Team</p>`,
+  };
   let emailSent = false;
   try {
     const pdf = paymentPdfBuffer(invoice, refreshed, refreshed.user);
@@ -1139,6 +1150,13 @@ router.post("/payments/:id/reject", asyncHandler(async (req, res) => {
   payment.reviewedAt = new Date();
   payment.reviewReason = reason;
   await payment.save();
+  await ApprovalLog.create({
+    admin: req.user._id,
+    payment: payment._id,
+    invoice: payment.invoice._id,
+    action: "rejected",
+    reason,
+  });
   let order = payment.order;
   if (order?._id) {
     order.paymentStatus = "payment rejected";
@@ -1233,21 +1251,29 @@ router.patch("/pricing/:slug", asyncHandler(async (req, res) => {
   res.json({ ok: true, package: publicPackage(row), packages: packages.map(publicPackage) });
 }));
 
-router.get("/support-tickets", asyncHandler(async (_req, res) => {
-  const tickets = await SupportTicket.find().populate("user", "name email company phone").sort({ createdAt: -1 });
+router.get("/support-tickets", asyncHandler(async (req, res) => {
+  const filter = req.query.archived === "true" ? { status: "resolved" } : { status: { $ne: "resolved" } };
+  await SupportTicket.updateMany({ status: "in review" }, { status: "in progress" });
+  const tickets = await SupportTicket.find(filter).populate("user", "name email company phone").populate("replies.admin", "name email").sort({ createdAt: -1 });
   res.json({ ok: true, tickets });
 }));
 
 router.patch("/support-tickets/:id", asyncHandler(async (req, res) => {
   const update = {};
-  if (Object.prototype.hasOwnProperty.call(req.body, "status")) update.status = req.body.status;
-  if (Object.prototype.hasOwnProperty.call(req.body, "adminResponse")) update.adminResponse = req.body.adminResponse;
+  const requestedStatus = req.body.status === "in review" ? "in progress" : req.body.status;
+  if (Object.prototype.hasOwnProperty.call(req.body, "status") && ["open", "in progress", "resolved"].includes(requestedStatus)) update.status = requestedStatus;
+  const adminResponse = cleanString(req.body.adminResponse);
+  if (Object.prototype.hasOwnProperty.call(req.body, "adminResponse")) update.adminResponse = adminResponse;
   if (update.status === "resolved") {
     update.resolvedAt = new Date();
     update.resolvedBy = req.user._id;
   }
 
-  const ticket = await SupportTicket.findByIdAndUpdate(req.params.id, update, { new: true }).populate("user", "name email company phone");
+  const updateOperation = { $set: update };
+  if (adminResponse) {
+    updateOperation.$push = { replies: { message: adminResponse, admin: req.user._id, adminName: req.user.name } };
+  }
+  const ticket = await SupportTicket.findByIdAndUpdate(req.params.id, updateOperation, { new: true }).populate("user", "name email company phone").populate("replies.admin", "name email");
   if (!ticket) {
     const error = new Error("Support ticket not found");
     error.statusCode = 404;
@@ -1256,8 +1282,8 @@ router.patch("/support-tickets/:id", asyncHandler(async (req, res) => {
 
   await Notification.create({
     user: ticket.user._id,
-    title: update.status === "resolved" ? "Support ticket resolved" : "Support ticket updated",
-    body: ticket.adminResponse || `Your ticket status is now ${ticket.status}.`,
+    title: update.status === "resolved" ? "Support ticket resolved" : "Support ticket replied to",
+    body: adminResponse || `Your ticket status is now ${ticket.status}.`,
     type: "support",
   });
 

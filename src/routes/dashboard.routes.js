@@ -1,4 +1,5 @@
 const express = require("express");
+const bcrypt = require("bcryptjs");
 const { Invoice, Notification, Booking, OrderProgress, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
 const { asyncHandler } = require("../utils/asyncHandler");
@@ -22,6 +23,10 @@ function billMonth(invoice) {
 
 function cleanString(value, fallback = "") {
   return String(value ?? fallback).trim();
+}
+
+function escapeRegex(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizePaymentStatus(value = "") {
@@ -112,7 +117,7 @@ router.get("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
 }));
 
 router.patch("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
-  const allowed = ["name", "username", "company", "phone", "profilePicture"];
+  const allowed = ["name", "username", "company", "phone", "email"];
   const update = {};
 
   for (const field of allowed) {
@@ -132,14 +137,52 @@ router.patch("/dashboard/profile", requireAuth, asyncHandler(async (req, res) =>
     throw error;
   }
 
-  if (update.profilePicture && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(update.profilePicture) && !/^https?:\/\//i.test(update.profilePicture)) {
-    const error = new Error("Profile picture must be an image upload or valid URL");
+  if (update.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(update.email)) {
+    const error = new Error("Enter a valid email address");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (update.email && update.email !== req.user.email) {
+    const exists = await User.findOne({ email: update.email, _id: { $ne: req.user._id } });
+    if (exists) {
+      const error = new Error("Email is already in use");
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+  if (update.username && !/^[a-zA-Z0-9_.-]{3,32}$/.test(update.username)) {
+    const error = new Error("Username must be 3-32 characters and use only letters, numbers, dots, dashes, or underscores");
     error.statusCode = 400;
     throw error;
   }
 
   const user = await User.findByIdAndUpdate(req.user._id, update, { new: true, runValidators: true }).select("-passwordHash");
   res.json({ ok: true, user: publicUser(user), message: "Profile updated." });
+}));
+
+router.patch("/dashboard/password", requireAuth, asyncHandler(async (req, res) => {
+  const currentPassword = cleanString(req.body?.currentPassword);
+  const newPassword = String(req.body?.newPassword || "");
+  if (!currentPassword || !newPassword) {
+    const error = new Error("Current password and new password are required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (newPassword.length < 8) {
+    const error = new Error("New password must be at least 8 characters");
+    error.statusCode = 400;
+    throw error;
+  }
+  const user = await User.findById(req.user._id);
+  const valid = user ? await bcrypt.compare(currentPassword, user.passwordHash) : false;
+  if (!valid) {
+    const error = new Error("Current password is incorrect");
+    error.statusCode = 400;
+    throw error;
+  }
+  user.passwordHash = await bcrypt.hash(newPassword, 12);
+  await user.save();
+  res.json({ ok: true, message: "Password updated successfully." });
 }));
 
 router.get("/invoices", requireAuth, asyncHandler(async (req, res) => {
@@ -286,6 +329,69 @@ router.post("/payments/submit", requireAuth, asyncHandler(async (req, res) => {
   res.status(201).json({ ok: true, payment, paymentStatus: normalizePaymentStatus("payment submitted") });
 }));
 
+router.post("/payments/confirm", requireAuth, asyncHandler(async (req, res) => {
+  const invoiceNumber = cleanString(req.body?.invoiceNumber).toUpperCase();
+  if (!invoiceNumber) {
+    const error = new Error("Invoice number is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/^[A-Z0-9][A-Z0-9-]{2,40}$/.test(invoiceNumber)) {
+    const error = new Error("Enter a valid invoice number.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const invoice = await Invoice.findOne({ invoice: new RegExp(`^${escapeRegex(invoiceNumber)}$`, "i"), user: req.user._id });
+  if (!invoice) {
+    const error = new Error("Invoice not found for your account.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (invoice.status === "paid") {
+    const error = new Error("This invoice has already been paid.");
+    error.statusCode = 409;
+    throw error;
+  }
+  const existing = await PaymentSubmission.findOne({
+    invoice: invoice._id,
+    user: req.user._id,
+    status: { $in: ["submitted", "approved"] },
+  });
+  if (existing) {
+    const error = new Error("A payment confirmation request already exists for this invoice.");
+    error.statusCode = 409;
+    throw error;
+  }
+  const order = await Booking.findOne({ user: req.user._id, companyName: invoice.company }).sort({ updatedAt: -1 });
+  const payment = await PaymentSubmission.create({
+    user: req.user._id,
+    order: order?._id || null,
+    invoice: invoice._id,
+    amount: invoice.amount,
+    currency: invoice.currency,
+    paymentDate: new Date(),
+    paymentMethod: "Invoice payment confirmation",
+    transactionId: `CONFIRM-${invoice.invoice}`,
+    note: "User confirmed payment from dashboard by invoice number.",
+  });
+  if (order) {
+    order.paymentStatus = "payment submitted";
+    await order.save();
+  }
+  await Notification.create({
+    user: null,
+    title: "New payment confirmation request",
+    body: `${req.user.name} submitted payment confirmation for ${invoice.invoice}.`,
+    type: "billing",
+  });
+  res.status(201).json({
+    ok: true,
+    payment,
+    invoice,
+    message: "Payment confirmation submitted successfully. Please wait for admin approval.",
+  });
+}));
+
 router.get("/notifications", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
   const notifications = await Notification.find(filter).sort({ createdAt: -1 });
@@ -294,6 +400,7 @@ router.get("/notifications", requireAuth, asyncHandler(async (req, res) => {
 
 router.get("/support-tickets", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
+  await SupportTicket.updateMany({ ...filter, status: "in review" }, { status: "in progress" });
   const tickets = await SupportTicket.find(filter).populate("user", "name email company phone").sort({ createdAt: -1 });
   res.json({ ok: true, tickets });
 }));
@@ -308,6 +415,12 @@ router.post("/support-tickets", requireAuth, asyncHandler(async (req, res) => {
   }
 
   const ticket = await SupportTicket.create({ user: req.user._id, subject, message });
+  await Notification.create({
+    user: null,
+    title: "New support ticket",
+    body: `${req.user.name} created a support ticket: ${subject}`,
+    type: "support",
+  });
   try {
     await sendEmail({
       to: process.env.SUPPORT_EMAIL || "support@zmhusacorp.com",
@@ -327,7 +440,12 @@ router.post("/support-tickets", requireAuth, asyncHandler(async (req, res) => {
     console.error("[support ticket email failed]", error.message);
   }
 
-  res.status(201).json({ ok: true, ticket });
+  const populated = await SupportTicket.findById(ticket._id).populate("user", "name email company phone");
+  res.status(201).json({
+    ok: true,
+    ticket: populated,
+    message: "Support ticket created successfully. Our support team will review your request and respond as soon as possible.",
+  });
 }));
 
 module.exports = router;
