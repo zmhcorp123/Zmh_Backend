@@ -6,7 +6,11 @@ const { asyncHandler } = require("../utils/asyncHandler");
 const router = express.Router();
 
 function inquiryRecipients() {
-  return process.env.CONTACT_TO_EMAIL || process.env.SUPPORT_EMAIL || "support@zmhusacorp.com";
+  return [...new Set([
+    process.env.CONTACT_TO_EMAIL,
+    process.env.SUPPORT_EMAIL,
+    "support@zmhusacorp.com",
+  ].filter(Boolean))];
 }
 
 function escapeHtml(value = "") {
