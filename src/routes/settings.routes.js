@@ -53,4 +53,9 @@ router.get("/company", asyncHandler(async (_req, res) => {
   res.json({ ok: true, companyDetails: setting?.value || {} });
 }));
 
+router.get("/team-profiles", asyncHandler(async (_req, res) => {
+  const setting = await Setting.findOne({ key: "teamProfiles" });
+  res.json({ ok: true, teamProfiles: Array.isArray(setting?.value) ? setting.value : null });
+}));
+
 module.exports = router;
