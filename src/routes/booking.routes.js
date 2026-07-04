@@ -1,6 +1,7 @@
 const express = require("express");
 const { Booking, User } = require("../models");
 const { sendEmail } = require("../config/email");
+const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { requireAuth } = require("../middleware/auth");
 const jwt = require("jsonwebtoken");
@@ -39,13 +40,14 @@ function bookingSummary(booking) {
 }
 
 function inquiryRecipients() {
-  return process.env.CONTACT_TO_EMAIL || process.env.SUPPORT_EMAIL || "support@zmhusacorp.com";
+  return process.env.CONTACT_TO_EMAIL || process.env.SUPPORT_EMAIL || EMAIL_ADDRESSES.support;
 }
 
 async function notifySalesOfBooking(booking, user) {
   try {
     await sendEmail({
-      to: [process.env.SALES_EMAIL || "sales@zmhusacorp.com", inquiryRecipients()],
+      to: [process.env.SALES_EMAIL || EMAIL_ADDRESSES.sales, inquiryRecipients()],
+      from: EMAIL_SENDERS.sales,
       subject: `New booking request from ${booking.companyName}`,
       text: `A new booking request was submitted.\n\n${bookingSummary(booking)}\n\nUser account: ${user?.email || "Public visitor"}`,
       html: `

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { EMAIL_ADDRESSES } = require("../config/emailConfig");
 
 const userSchema = new mongoose.Schema({
   name: { type: String, trim: true, required: true },
@@ -128,7 +129,7 @@ const emailHistorySchema = new mongoose.Schema({
   order: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
   invoice: { type: mongoose.Schema.Types.ObjectId, ref: "Invoice", default: null },
   to: { type: String, trim: true, lowercase: true, required: true },
-  from: { type: String, trim: true, default: "sales@zmhusacorp.com" },
+  from: { type: String, trim: true, default: EMAIL_ADDRESSES.sales },
   subject: { type: String, trim: true, required: true },
   status: { type: String, enum: ["sent", "skipped", "failed"], default: "sent" },
   providerId: { type: String, trim: true, default: "" },

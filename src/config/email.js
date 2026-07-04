@@ -1,6 +1,8 @@
+const { EMAIL_SENDERS } = require("./emailConfig");
+
 async function sendEmail({ to, subject, html, text, from: requestedFrom, attachments = [] }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = requestedFrom || process.env.RESEND_FROM || "ZMH USA Corp <verify@zmhusacorp.com>";
+  const from = requestedFrom || process.env.RESEND_FROM || EMAIL_SENDERS.notifications;
 
   if (!apiKey) {
     console.log("[email skipped]", { from, to, subject, text, attachments: attachments.map((item) => item.filename) });

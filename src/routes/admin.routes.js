@@ -1,6 +1,7 @@
 const express = require("express");
 const { ApprovalLog, Booking, EmailHistory, Invoice, Notification, OrderProgress, PackagePricing, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
+const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { asyncHandler } = require("../utils/asyncHandler");
 
@@ -651,6 +652,7 @@ async function sendBookingDecisionEmail(booking) {
   try {
     await sendEmail({
       to,
+      from: EMAIL_SENDERS.sales,
       subject,
       text: `Hi${booking.user?.name ? " " + booking.user.name : ""},\n\n${response}\n\nCompany: ${booking.companyName}\nStatus: ${booking.status}\nRequested date: ${booking.requestedDate ? booking.requestedDate.toDateString() : "Not selected"}\n\nZMH USA Corp`,
       html: `
@@ -685,6 +687,7 @@ async function sendApprovalEmail(user) {
   try {
     await sendEmail({
       to: user.email,
+      from: EMAIL_SENDERS.accounts,
       subject: "Your ZMH account has been approved",
       text: `Hi ${user.name}, your ZMH USA Corp account has been approved. You can now log in at https://zmhusacorp.com/login.`,
       html: `<p>Hi ${user.name},</p><p>Your ZMH USA Corp account has been approved.</p><p>You can now log in at <a href="https://zmhusacorp.com/login">https://zmhusacorp.com/login</a>.</p>`,
@@ -945,13 +948,13 @@ router.post("/orders/:id/send-invoice-summary", asyncHandler(async (req, res) =>
   const history = new EmailHistory({
     order: order._id,
     to,
-    from: "billing@zmhusacorp.com",
+    from: EMAIL_ADDRESSES.billing,
     subject: email.subject,
   });
   try {
     const result = await sendEmail({
       to,
-      from: "ZMH USA Corp Billing <billing@zmhusacorp.com>",
+      from: EMAIL_SENDERS.billing,
       subject: email.subject,
       html: email.html,
       text: email.text,
@@ -988,7 +991,7 @@ async function emailBill(user, invoice) {
   try {
     await sendEmail({
       to: user.email,
-      from: "ZMH USA Corp Billing <billing@zmhusacorp.com>",
+      from: EMAIL_SENDERS.billing,
       subject: `ZMH invoice ${invoice.invoice}`,
       text: `Hi ${user.name},\n\nA new bill has been sent to your ZMH account.\n\nInvoice: ${invoice.invoice}\nAmount: ${invoice.currency} ${invoice.amount}\nDue date: ${invoice.dueDate ? invoice.dueDate.toDateString() : "Not selected"}\n${invoice.message || ""}`,
       html: `
@@ -1119,7 +1122,7 @@ router.post("/payments/:id/approve", asyncHandler(async (req, res) => {
     const pdf = paymentPdfBuffer(invoice, refreshed, refreshed.user);
     const result = await sendEmail({
       to: refreshed.user.email,
-      from: "ZMH USA Corp Billing <billing@zmhusacorp.com>",
+      from: EMAIL_SENDERS.billing,
       subject: email.subject,
       html: email.html,
       text: email.text,
@@ -1175,7 +1178,7 @@ router.post("/payments/:id/reject", asyncHandler(async (req, res) => {
   try {
     const result = await sendEmail({
       to: refreshed.user.email,
-      from: "ZMH USA Corp Accounts <accounts@zmhusacorp.com>",
+      from: EMAIL_SENDERS.billing,
       subject: email.subject,
       html: email.html,
       text: email.text,
@@ -1286,6 +1289,27 @@ router.patch("/support-tickets/:id", asyncHandler(async (req, res) => {
     body: adminResponse || `Your ticket status is now ${ticket.status}.`,
     type: "support",
   });
+  if (ticket.user?.email) {
+    try {
+      await sendEmail({
+        to: ticket.user.email,
+        from: EMAIL_SENDERS.support,
+        subject: update.status === "resolved" ? `Support ticket resolved: ${ticket.subject}` : `Support ticket update: ${ticket.subject}`,
+        text: `Hello ${ticket.user.name || "there"},\n\n${adminResponse || `Your support ticket status is now ${ticket.status}.`}\n\nTicket: ${ticket.subject}\nStatus: ${ticket.status}\n\nRegards,\nSupport Team`,
+        html: `
+          <p>Hello ${escapeHtml(ticket.user.name || "there")},</p>
+          <p>${escapeHtml(adminResponse || `Your support ticket status is now ${ticket.status}.`)}</p>
+          <ul>
+            <li><strong>Ticket:</strong> ${escapeHtml(ticket.subject)}</li>
+            <li><strong>Status:</strong> ${escapeHtml(ticket.status)}</li>
+          </ul>
+          <p>Regards,<br />Support Team</p>
+        `,
+      });
+    } catch (error) {
+      console.error("[support ticket update email failed]", error.message);
+    }
+  }
 
   res.json({ ok: true, ticket });
 }));

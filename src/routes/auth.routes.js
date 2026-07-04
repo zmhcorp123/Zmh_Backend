@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { User, Otp } = require("../models");
 const { sendEmail } = require("../config/email");
+const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { publicUser } = require("../utils/publicUser");
 const { signToken } = require("../middleware/auth");
@@ -34,10 +35,34 @@ async function createAndSendOtp(email, purpose = "signup") {
   await Otp.create({ email, codeHash, purpose, ...timing });
   await sendEmail({
     to: email,
+    from: EMAIL_SENDERS.notifications,
     subject: "Your ZMH verification code",
     text: `Your ZMH verification code is ${code}. It expires in ${timing.expiryMinutes} minutes.`,
     html: `<p>Your ZMH verification code is <strong>${code}</strong>.</p><p>It expires in ${timing.expiryMinutes} minutes.</p>`,
   });
+}
+
+async function notifyAccountsOfSignup(user) {
+  try {
+    await sendEmail({
+      to: process.env.ACCOUNTS_EMAIL || EMAIL_ADDRESSES.accounts,
+      from: EMAIL_SENDERS.accounts,
+      subject: `New signup request: ${user.name}`,
+      text: `A new user requested signup.\n\nName: ${user.name}\nEmail: ${user.email}\nCompany: ${user.company || "Not provided"}\nPhone: ${user.phone || "Not provided"}\nStatus: ${user.status}`,
+      html: `
+        <p>A new user requested signup.</p>
+        <ul>
+          <li><strong>Name:</strong> ${user.name}</li>
+          <li><strong>Email:</strong> ${user.email}</li>
+          <li><strong>Company:</strong> ${user.company || "Not provided"}</li>
+          <li><strong>Phone:</strong> ${user.phone || "Not provided"}</li>
+          <li><strong>Status:</strong> ${user.status}</li>
+        </ul>
+      `,
+    });
+  } catch (error) {
+    console.error("[signup accounts email failed]", error.message);
+  }
 }
 
 router.post("/signup", asyncHandler(async (req, res) => {
@@ -56,6 +81,7 @@ router.post("/signup", asyncHandler(async (req, res) => {
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await User.create({ name, email, passwordHash, company, phone, status: "pending", isEmailVerified: false });
   await createAndSendOtp(user.email, "signup");
+  await notifyAccountsOfSignup(user);
   res.status(201).json({
     ok: true,
     user: publicUser(user),

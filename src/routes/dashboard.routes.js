@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const { Invoice, Notification, Booking, OrderProgress, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
+const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { requireAuth } = require("../middleware/auth");
 const { publicUser } = require("../utils/publicUser");
@@ -317,8 +318,8 @@ router.post("/payments/submit", requireAuth, asyncHandler(async (req, res) => {
   });
   try {
     await sendEmail({
-      to: process.env.ACCOUNTS_EMAIL || "accounts@zmhusacorp.com",
-      from: "ZMH USA Corp Accounts <accounts@zmhusacorp.com>",
+      to: process.env.ACCOUNTS_EMAIL || EMAIL_ADDRESSES.accounts,
+      from: EMAIL_SENDERS.billing,
       subject: `Payment submitted: ${invoice.invoice}`,
       text: `${req.user.name} submitted payment proof for ${invoice.invoice}. Transaction: ${transactionId}.`,
       html: `<p><strong>${req.user.name}</strong> submitted payment proof for <strong>${invoice.invoice}</strong>.</p><p>Method: ${paymentMethod}<br />Transaction: ${transactionId}<br />Amount: ${invoice.currency} ${invoice.amount}</p>`,
@@ -423,7 +424,8 @@ router.post("/support-tickets", requireAuth, asyncHandler(async (req, res) => {
   });
   try {
     await sendEmail({
-      to: process.env.SUPPORT_EMAIL || "support@zmhusacorp.com",
+      to: process.env.SUPPORT_EMAIL || EMAIL_ADDRESSES.support,
+      from: EMAIL_SENDERS.support,
       subject: `New support ticket: ${subject}`,
       text: `A new support ticket was created.\n\nUser: ${req.user.name}\nEmail: ${req.user.email}\nCompany: ${req.user.company || "Not provided"}\n\n${message}`,
       html: `
