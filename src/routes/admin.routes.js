@@ -240,7 +240,6 @@ function createSummaryPdfBuffer(order, summary) {
   };
 
   const field = (x, y, label, value) => [op.text(x, y + 18, label, 8, "F2", brand.muted), op.text(x, y, value || "Not provided", 11, "F2", brand.dark)].join("\n");
-  const qr = (x, y, seed) => Array.from({ length: 9 }, (_, row) => Array.from({ length: 9 }, (_, col) => ((row * 11 + col * 7 + seed.length) % 5 < 2 ? `${brand.dark} rg ${x + col * 6} ${y + row * 6} 4 4 re f` : "")).join("\n")).join("\n");
   const barcode = (x, y, seed) => Array.from({ length: 34 }, (_, index) => `${brand.dark} rg ${x + index * 5} ${y} ${((seed.charCodeAt(index % seed.length) || 3) % 3) + 1} 46 re f`).join("\n");
 
   const page1 = [
@@ -286,7 +285,7 @@ function createSummaryPdfBuffer(order, summary) {
   const page5 = [op.header("Service Analytics", 5), op.rect(48, 560, 160, 120, "1 1 1"), op.text(78, 632, `${progressValue}%`, 34, "F2", brand.blue), op.text(78, 608, "Completion", 12, "F2"), op.progress(78, 590, 100, progressValue), op.rect(226, 560, 160, 120, "1 1 1"), op.text(256, 632, `${100 - progressValue}%`, 34, "F2", brand.orange), op.text(256, 608, "Remaining", 12, "F2"), op.rect(404, 560, 160, 120, "1 1 1"), op.text(434, 632, `${healthScore}`, 34, "F2", brand.green), op.text(434, 608, "Health Score", 12, "F2"), op.text(48, 500, "Completed Services", 16, "F2"), ...completed.slice(0, 8).map((item, i) => op.text(64, 474 - i * 22, `✓ ${item}`, 10, "F2", brand.green)), op.text(316, 500, "Remaining Services", 16, "F2"), ...remaining.slice(0, 8).map((item, i) => op.text(332, 474 - i * 22, `• ${item}`, 10, "F2", brand.blue)), op.rect(48, 150, 516, 78, "1 1 1"), field(70, 188, "Current Milestone", completed[0] || "Initial setup"), field(260, 188, "Next Milestone", remaining[0] || "Executive review"), field(438, 188, "Estimated Completion", progressValue >= 100 ? "Completed" : "In progress")].join("\n");
 
   const invoiceRows = [["Package", summary.package.name], ["Subtotal", `${meta.currency} ${meta.subtotal.toFixed(2)}`], ["Discount", `${meta.currency} ${meta.discount.toFixed(2)}`], ["Tax", `${meta.currency} ${meta.tax.toFixed(2)}`], ["Total", `${meta.currency} ${meta.total.toFixed(2)}`], ["Amount Paid", `${meta.currency} ${meta.amountPaid.toFixed(2)}`], ["Outstanding Balance", `${meta.currency} ${meta.outstanding.toFixed(2)}`], ["Payment Terms", meta.paymentTerms], ["Reference Number", meta.reference]];
-  const page6 = [op.header("Invoice Summary", 6), op.rect(48, 594, 516, 92, "1 1 1"), field(70, 652, "Invoice Number", meta.invoiceNumber), field(260, 652, "Currency", meta.currency), field(420, 652, "Payment Status", summary.billing.paymentStatus), op.pill(420, 612, summary.billing.paymentStatus, statusColor(summary.billing.paymentStatus)), ...invoiceRows.map(([label, value], i) => [op.line(70, 560 - i * 36, 382, 560 - i * 36), op.text(74, 542 - i * 36, label, 10, "F2", brand.muted), op.text(246, 542 - i * 36, value, 10, "F2", brand.dark)].join("\n")), op.rect(420, 368, 112, 112, "1 1 1"), qr(438, 392, meta.invoiceNumber), op.text(428, 344, "Invoice QR", 10, "F2", brand.muted), barcode(420, 270, meta.invoiceNumber), op.text(420, 252, "Barcode", 9, "F2", brand.muted)].join("\n");
+  const page6 = [op.header("Invoice Summary", 6), op.rect(48, 594, 516, 92, "1 1 1"), field(70, 652, "Invoice Number", meta.invoiceNumber), field(260, 652, "Currency", meta.currency), field(420, 652, "Payment Status", summary.billing.paymentStatus), op.pill(420, 612, summary.billing.paymentStatus, statusColor(summary.billing.paymentStatus)), ...invoiceRows.map(([label, value], i) => [op.line(70, 560 - i * 36, 382, 560 - i * 36), op.text(74, 542 - i * 36, label, 10, "F2", brand.muted), op.text(246, 542 - i * 36, value, 10, "F2", brand.dark)].join("\n")), op.rect(420, 368, 112, 112, "1 1 1"), op.text(438, 444, "Invoice Reference", 11, "F2", brand.muted), op.text(438, 420, meta.reference, 10, "F2", brand.dark), barcode(420, 270, meta.invoiceNumber), op.text(420, 252, "Barcode", 9, "F2", brand.muted)].join("\n");
 
   const bankRows = [["Beneficiary Name", summary.accountDetails.beneficiaryName], ["Bank Name", summary.accountDetails.bankName], ["Account Number", summary.accountDetails.accountNumber], ["Routing Number", summary.accountDetails.routingNumber || "Provided on request"], ["IBAN", summary.accountDetails.iban || "Not provided"], ["SWIFT", summary.accountDetails.swiftCode || "Provided on request"], ["Branch", summary.accountDetails.branchName || "Not provided"], ["Bank Address", summary.accountDetails.bankAddress || "Not provided"], ["Payment Reference", meta.reference], ["Payment Instructions", summary.accountDetails.paymentInstructions]];
   const page7 = [op.header("Bank Transfer Details", 7), ...bankRows.map(([label, value], index) => {
@@ -294,7 +293,7 @@ function createSummaryPdfBuffer(order, summary) {
     return [op.rect(48, y - 20, 516, 42, index % 2 ? "0.98 0.99 1" : "1 1 1"), op.text(66, y + 4, label, 9, "F2", brand.muted), op.text(238, y + 2, value, 10, "F2")].join("\n");
   }), op.rect(48, 84, 516, 60, "1 1 1"), op.text(66, 118, "Important Notes", 12, "F2"), op.text(66, 98, "Use the payment reference exactly as shown to avoid posting delays. Contact sales@zmhusacorp.com for support.", 9, "F1", brand.muted)].join("\n");
 
-  const page8 = [op.header("Company Information", 8), op.text(48, 664, "About ZMH USA Corp", 24, "F2"), ...chunkText("ZMH USA Corp provides remote operations support for home service companies, helping teams manage calls, dispatch, customer support, CRM workflows, billing coordination, and service reporting with professional operating discipline.", 88).map((line, i) => op.text(48, 632 - i * 16, line, 10, "F1", brand.muted)), op.rect(48, 472, 516, 94, "1 1 1"), field(70, 532, "Mission", "Make premium remote operations accessible to growing service companies."), field(70, 488, "Website", "zmhusacorp.com"), field(250, 488, "Support Email", "support@zmhusacorp.com"), field(430, 488, "Sales Email", "sales@zmhusacorp.com"), op.rect(48, 300, 240, 92, "1 1 1"), field(70, 350, "Phone", "+1 (555) 018-2048"), field(70, 314, "Business Hours", "Monday-Friday, 9 AM-6 PM ET"), op.rect(324, 284, 150, 150, "1 1 1"), qr(354, 326, "zmhusacorp.com"), op.text(344, 300, "Website QR Code", 10, "F2", brand.muted), op.text(48, 220, "Thank you for choosing ZMH USA Corp.", 20, "F2", brand.blue)].join("\n");
+  const page8 = [op.header("Company Information", 8), op.text(48, 664, "About ZMH USA Corp", 24, "F2"), ...chunkText("ZMH USA Corp provides remote operations support for home service companies, helping teams manage calls, dispatch, customer support, CRM workflows, billing coordination, and service reporting with professional operating discipline.", 88).map((line, i) => op.text(48, 632 - i * 16, line, 10, "F1", brand.muted)), op.rect(48, 472, 516, 94, "1 1 1"), field(70, 532, "Mission", "Make premium remote operations accessible to growing service companies."), field(70, 488, "Website", "zmhusacorp.com"), field(250, 488, "Support Email", "support@zmhusacorp.com"), field(430, 488, "Sales Email", "sales@zmhusacorp.com"), op.rect(48, 300, 240, 92, "1 1 1"), field(70, 350, "Phone", "+1 (555) 018-2048"), field(70, 314, "Business Hours", "Monday-Friday, 9 AM-6 PM ET"), op.rect(324, 284, 180, 92, "1 1 1"), field(344, 338, "Website", "zmhusacorp.com"), field(344, 302, "Dashboard", "Client portal access"), op.text(48, 220, "Thank you for choosing ZMH USA Corp.", 20, "F2", brand.blue)].join("\n");
 
   const contents = [page1, page2, page3, page4, page5, page6, page7, page8];
   const pageObjectStart = 6;
@@ -342,8 +341,7 @@ function createExecutiveSummaryPdfBuffer(order, summary) {
   const invoices = summary.billing.invoices || [];
   const files = order.filesUploaded || [];
   const progressValue = Math.max(0, Math.min(100, Number(summary.currentProgress) || 0));
-  const needsAppendix = Boolean(summary.notes) || files.length > 0 || invoices.length > 4 || services.length > 10 || summary.timeline.length > 6;
-  const pageCount = needsAppendix ? 3 : 2;
+  const pageCount = 3;
   const statusColor = (status = "") => {
     const value = String(status).toLowerCase();
     if (["paid", "completed", "approved"].includes(value)) return brand.green;
@@ -364,7 +362,6 @@ function createExecutiveSummaryPdfBuffer(order, summary) {
   const card = (x, y, w, h, label, value, color = brand.blue) => [op.rect(x + 2, y - 2, w, h, "0.89 0.92 0.96", "0.89 0.92 0.96"), op.rect(x, y, w, h), `${color} rg ${x} ${y + h - 4} ${w} 4 re f`, op.text(x + 12, y + h - 22, label, 7.5, "F2", brand.muted, 28), op.text(x + 12, y + 15, value || "Not provided", 12, "F2", brand.dark, 34)].join("\n");
   const miniCard = (x, y, w, h, label, value, color = brand.blue) => [op.rect(x, y, w, h), op.text(x + 10, y + h - 18, label, 7, "F2", brand.muted, 24), op.text(x + 10, y + 13, value || "Not provided", 10, "F2", color, 34)].join("\n");
   const chip = (x, y, w, value, color = brand.blue, fill = "0.94 0.97 1") => [op.rect(x, y, w, 32, fill, "0.82 0.87 0.94"), op.text(x + 9, y + 11, value, 8.2, "F2", color, 34)].join("\n");
-  const qr = (x, y, seed) => Array.from({ length: 9 }, (_, row) => Array.from({ length: 9 }, (_, col) => ((row * 11 + col * 7 + seed.length) % 5 < 2 ? `${brand.dark} rg ${x + col * 5} ${y + row * 5} 4 4 re f` : "")).join("\n")).join("\n");
   const timeline = (items, x, y, max = 4) => (items.length ? items : [{ title: "Service timeline pending", status: "planned", progressPercent: progressValue, happenedAt: new Date() }]).slice(0, max).map((item, index) => {
     const rowY = y - index * 44;
     const color = statusColor(item.status);
@@ -380,44 +377,104 @@ function createExecutiveSummaryPdfBuffer(order, summary) {
     return [...ops, op.rect(cx - 29, cy - 29, 66, 66, brand.white, brand.white), op.text(cx - 23, cy + 2, `${pct}%`, 22, "F2", brand.blue), op.text(cx - 24, cy - 15, "complete", 8, "F2", brand.muted)].join("\n");
   };
 
+  const companyRows = [
+    ["Company", summary.company.name],
+    ["Contact Person", summary.company.contactPerson || order.user?.name || "Client"],
+    ["Email", summary.company.email || order.email || order.user?.email],
+    ["Phone", summary.company.phone || order.phone],
+    ["Website", summary.company.website || order.website],
+    ["Address", summary.company.address || order.address],
+    ["Industry", order.businessType || "Home services"],
+    ["Package", summary.package.name],
+    ["Package Price", summary.package.price],
+    ["Manager", order.assignedStaff || "ZMH Team"],
+    ["Service Start", formatDate(order.serviceStartDate || order.createdAt)],
+    ["Next Billing", formatDate(order.nextBillingDate)],
+  ];
+  const invoiceRows = [
+    ["Invoice Number", meta.invoiceNumber],
+    ["Reference", meta.reference],
+    ["Issue Date", meta.issueDate],
+    ["Due Date", meta.dueDate],
+    ["Subtotal", `${meta.currency} ${meta.subtotal.toFixed(2)}`],
+    ["Discount", `${meta.currency} ${meta.discount.toFixed(2)}`],
+    ["Tax", `${meta.currency} ${meta.tax.toFixed(2)}`],
+    ["Total", `${meta.currency} ${meta.total.toFixed(2)}`],
+    ["Paid", `${meta.currency} ${meta.amountPaid.toFixed(2)}`],
+    ["Remaining", `${meta.currency} ${meta.outstanding.toFixed(2)}`],
+    ["Invoice Status", invoices[0]?.status || "sent"],
+    ["Payment Status", summary.billing.paymentStatus],
+  ];
+  const bankRows = [
+    ["Beneficiary", summary.accountDetails.beneficiaryName],
+    ["Bank", summary.accountDetails.bankName],
+    ["Account", summary.accountDetails.accountNumber],
+    ["Routing", summary.accountDetails.routingNumber || "Provided on request"],
+    ["SWIFT", summary.accountDetails.swiftCode || "Provided on request"],
+    ["Reference", meta.reference],
+  ];
+
   const page1 = [
-    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"), op.rect(0, 620, 612, 172, brand.dark, brand.dark), `${brand.blue} rg 392 620 220 172 re f`,
-    logo(38, 704), op.text(92, 730, "ZMH USA Corp", 18, "F2", brand.white), op.text(92, 704, "Invoice Summary", 25, "F2", brand.white, 24), op.text(92, 676, "Service Report", 25, "F2", brand.white, 24), op.text(92, 654, "Executive overview for client leadership", 10.5, "F1", "0.82 0.91 1", 46),
-    op.rect(430, 724, 132, 26, brand.white, brand.white), op.text(446, 733, meta.invoiceNumber, 8.5, "F2", brand.blue, 30), op.pill(430, 688, `Invoice: ${invoices[0]?.status || "sent"}`, statusColor(invoices[0]?.status || "sent"), 132), op.pill(430, 654, `Payment: ${summary.billing.paymentStatus}`, statusColor(summary.billing.paymentStatus), 132),
-    card(38, 552, 126, 52, "Issue Date", meta.issueDate), card(174, 552, 126, 52, "Due Date", meta.dueDate, brand.orange), card(310, 552, 126, 52, "Client Company", summary.company.name), card(446, 552, 128, 52, "Contact Person", summary.company.contactPerson || order.user?.name || "Client"),
-    card(38, 486, 170, 52, "Package Name", summary.package.name, brand.green), card(220, 486, 126, 52, "Monthly Price", summary.package.price, brand.orange), card(358, 486, 104, 52, "Progress", `${progressValue}%`, brand.blue), card(474, 486, 100, 52, "Manager", order.assignedStaff || "ZMH Team", brand.green),
-    title(38, 446, "Executive KPI Dashboard"), miniCard(38, 366, 118, 54, "Current Package", summary.package.name), miniCard(166, 366, 112, 54, "Current Progress", `${progressValue}%`, brand.green), miniCard(288, 366, 112, 54, "Payment Status", summary.billing.paymentStatus, statusColor(summary.billing.paymentStatus)), miniCard(410, 366, 164, 54, "Outstanding Balance", `${meta.currency} ${meta.outstanding.toFixed(2)}`, brand.orange),
-    miniCard(38, 294, 162, 54, "Current Billing Cycle", `${meta.issueDate} - ${meta.dueDate}`), miniCard(210, 294, 142, 54, "Next Billing Date", formatDate(order.nextBillingDate), brand.orange), miniCard(362, 294, 100, 54, "Invoice Total", `${meta.currency} ${meta.total.toFixed(2)}`, brand.dark), miniCard(474, 294, 100, 54, "Paid", `${meta.currency} ${meta.amountPaid.toFixed(2)}`, brand.green),
-    op.rect(38, 126, 258, 134), op.text(56, 234, "Service Progress", 16, "F2"), op.progress(56, 202, 202, progressValue, brand.green), op.text(56, 178, `${progressValue}% complete across ${services.length} service line${services.length === 1 ? "" : "s"}`, 10, "F2", brand.muted, 68), op.text(56, 152, `Completed: ${completed.length || 0} | Remaining: ${remaining.length || 0}`, 10, "F2", brand.dark),
-    op.rect(316, 126, 258, 134), op.text(334, 234, "Circular Progress", 16, "F2"), ring(456, 184, progressValue), op.footer(1),
+    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"),
+    op.rect(0, 632, 612, 160, brand.dark, brand.dark),
+    `${brand.blue} rg 420 632 192 160 re f`,
+    logo(38, 704),
+    op.text(92, 728, "ZMH USA Corp", 18, "F2", brand.white),
+    op.text(92, 700, "Company Details", 28, "F2", brand.white, 28),
+    op.text(92, 674, "Single client profile for billing and service review", 10.5, "F1", "0.82 0.91 1", 58),
+    op.pill(438, 718, meta.invoiceNumber, brand.white, 134), op.text(452, 725, meta.invoiceNumber, 8.5, "F2", brand.blue, 30),
+    op.pill(438, 682, `Payment: ${summary.billing.paymentStatus}`, statusColor(summary.billing.paymentStatus), 134),
+    title(38, 586, "Company Information"),
+    ...companyRows.map(([label, value], index) => {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      return miniCard(38 + col * 276, 526 - row * 66, 258, 52, label, value || "Not provided", col ? brand.green : brand.blue);
+    }),
+    op.rect(38, 92, 536, 78),
+    op.text(56, 142, "ZMH Contact", 13, "F2"),
+    op.text(56, 120, "sales@zmhusacorp.com | support@zmhusacorp.com | zmhusacorp.com", 9, "F2", brand.blue, 80),
+    op.footer(1),
   ].join("\n");
 
-  const invoiceRows = [["Subtotal", `${meta.currency} ${meta.subtotal.toFixed(2)}`], ["Discount", `${meta.currency} ${meta.discount.toFixed(2)}`], ["Tax", `${meta.currency} ${meta.tax.toFixed(2)}`], ["Total", `${meta.currency} ${meta.total.toFixed(2)}`], ["Paid", `${meta.currency} ${meta.amountPaid.toFixed(2)}`], ["Remaining", `${meta.currency} ${meta.outstanding.toFixed(2)}`], ["Payment Method", "Bank transfer"], ["Reference", meta.reference]];
-  const bankRows = [["Beneficiary", summary.accountDetails.beneficiaryName], ["Bank", summary.accountDetails.bankName], ["Account", summary.accountDetails.accountNumber], ["Routing", summary.accountDetails.routingNumber || "Provided on request"], ["SWIFT", summary.accountDetails.swiftCode || "Provided on request"], ["Reference", meta.reference]];
   const page2 = [
-    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"), logo(36, 742), op.text(88, 760, "ZMH USA Corp", 13, "F2"), op.text(88, 744, meta.invoiceNumber, 9, "F2", brand.muted),
-    title(36, 730, "Operations Summary"), op.rect(36, 640, 264, 70), op.text(52, 686, summary.package.name, 18, "F2"), ...chunkText(summary.package.description || order.serviceUpdates || "Premium remote operations support configured for this client account.", 46).slice(0, 2).map((line, index) => op.text(52, 666 - index * 14, line, 8.5, "F1", brand.muted, 54)), op.text(224, 686, summary.package.price, 14, "F2", brand.orange),
-    op.text(36, 614, "Included Services", 12, "F2"), ...services.slice(0, 8).map((item, index) => chip(36 + (index % 2) * 134, 572 - Math.floor(index / 2) * 41, 124, item)),
-    op.text(36, 392, "Completed Services", 12, "F2"), ...(completed.length ? completed : ["Progress updates pending"]).slice(0, 4).map((item, index) => chip(36, 350 - index * 38, 124, item, brand.green, "0.92 0.99 0.96")),
-    op.text(174, 392, "Remaining Services", 12, "F2"), ...(remaining.length ? remaining : ["Scope under review"]).slice(0, 4).map((item, index) => chip(174, 350 - index * 38, 126, item, brand.orange, "1 0.96 0.90")),
-    op.text(36, 178, "Current Timeline", 12, "F2"), timeline(summary.timeline, 40, 150, 3),
-    op.rect(318, 632, 258, 96), op.text(336, 704, "Invoice Summary", 16, "F2"), ...invoiceRows.map(([label, value], index) => [op.line(336, 674 - index * 24 - 7, 552, 674 - index * 24 - 7), op.text(338, 674 - index * 24, label, 8, "F2", brand.muted, 28), op.text(462, 674 - index * 24, value, 8.5, "F2", index >= 3 ? brand.dark : brand.muted, 30)].join("\n")),
-    op.rect(318, 332, 258, 166), op.text(336, 474, "Bank Transfer Details", 16, "F2"), ...bankRows.map(([label, value], index) => [op.text(336, 446 - index * 22, label, 7.5, "F2", brand.muted, 18), op.text(416, 446 - index * 22, value || "Not provided", 8.5, "F2", brand.dark, 32)].join("\n")),
-    op.rect(318, 198, 124, 104), op.text(334, 278, "Support Contact", 13, "F2"), op.text(334, 254, "sales@zmhusacorp.com", 8.5, "F2", brand.blue, 28), op.text(334, 236, "support@zmhusacorp.com", 8.5, "F2", brand.blue, 28), op.text(334, 218, "Dashboard: zmhusacorp.com", 8.5, "F2", brand.muted, 30),
-    op.rect(456, 198, 120, 104), op.text(474, 278, "QR Code", 13, "F2"), qr(490, 218, `${meta.invoiceNumber}-${meta.reference}`), op.footer(2),
+    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"),
+    logo(36, 742), op.text(88, 760, "ZMH USA Corp", 13, "F2"), op.text(88, 744, meta.invoiceNumber, 9, "F2", brand.muted),
+    title(36, 718, "Bill Summary"),
+    ...invoiceRows.map(([label, value], index) => {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      const color = label.includes("Status") || label === "Remaining" ? statusColor(String(value)) : brand.blue;
+      return miniCard(36 + col * 276, 650 - row * 58, 258, 46, label, value || "Not provided", color);
+    }),
+    title(36, 276, "Bank Transfer Details"),
+    ...bankRows.map(([label, value], index) => {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      return miniCard(36 + col * 276, 212 - row * 52, 258, 42, label, value || "Not provided", brand.dark);
+    }),
+    op.text(36, 64, "Please include the invoice reference with bank transfers to avoid posting delays.", 8.8, "F1", brand.muted, 96),
+    op.footer(2),
   ].join("\n");
 
-  const page3 = needsAppendix ? [
-    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"), logo(36, 742), op.text(88, 760, "Appendix", 18, "F2"), op.text(88, 742, "History, notes, files, and recommendations", 9, "F2", brand.muted),
-    title(36, 704, "Admin Notes & Recommendations"), op.rect(36, 606, 540, 72), ...chunkText(summary.notes || "No admin notes recorded for this reporting cycle.", 96).slice(0, 3).map((line, index) => op.text(54, 654 - index * 16, line, 9, "F1", brand.muted, 100)),
-    title(36, 566, "Invoice History"), ...invoices.slice(0, 6).map((invoice, index) => [op.rect(36, 528 - index * 32 - 8, 260, 24, index % 2 ? "0.98 0.99 1" : brand.white), op.text(48, 528 - index * 32, invoice.invoice, 8.5, "F2"), op.text(150, 528 - index * 32, `${invoice.currency} ${Number(invoice.amount || 0).toFixed(2)}`, 8.5, "F2", brand.orange), op.text(236, 528 - index * 32, invoice.status, 8.5, "F2", statusColor(invoice.status))].join("\n")),
-    title(320, 566, "Activity Log"), ...summary.timeline.slice(0, 6).map((item, index) => [op.rect(320, 528 - index * 32 - 8, 256, 24, index % 2 ? "0.98 0.99 1" : brand.white), op.text(332, 528 - index * 32, item.title, 8.5, "F2", brand.dark, 36), op.text(494, 528 - index * 32, `${item.progressPercent || 0}%`, 8.5, "F2", statusColor(item.status))].join("\n")),
-    title(36, 280, "Files Shared"), ...(files.length ? files : [{ name: "No shared files this cycle", uploadedAt: null }]).slice(0, 5).map((file, index) => op.text(54, 248 - index * 20, `${file.name || "File"} | ${formatDate(file.uploadedAt)}`, 9, "F2", brand.muted, 82)),
-    title(320, 280, "Future Roadmap"), ...remaining.slice(0, 5).map((item, index) => chip(320, 236 - index * 34, 236, item, brand.orange, "1 0.96 0.90")),
-    op.text(36, 78, "Terms: Payment is due by the listed due date. Please include the reference number with bank transfers.", 8.5, "F1", brand.muted, 112), op.footer(3),
-  ].join("\n") : null;
+  const page3 = [
+    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"),
+    logo(36, 742), op.text(88, 760, "ZMH USA Corp", 13, "F2"), op.text(88, 744, "Service Summary", 9, "F2", brand.muted),
+    title(36, 718, "Services"),
+    op.rect(36, 628, 540, 66), op.text(54, 670, summary.package.name, 18, "F2"), op.text(54, 648, summary.package.price, 12, "F2", brand.orange), op.progress(358, 660, 176, progressValue, brand.green), op.text(360, 640, `${progressValue}% complete`, 9, "F2", brand.muted, 34),
+    op.text(36, 592, "Included Services", 12, "F2"),
+    ...services.slice(0, 10).map((item, index) => chip(36 + (index % 2) * 276, 548 - Math.floor(index / 2) * 38, 258, item)),
+    op.text(36, 330, "Completed Services", 12, "F2"),
+    ...(completed.length ? completed : ["Progress updates pending"]).slice(0, 4).map((item, index) => chip(36, 290 - index * 36, 258, item, brand.green, "0.92 0.99 0.96")),
+    op.text(318, 330, "Remaining Services", 12, "F2"),
+    ...(remaining.length ? remaining : ["Scope under review"]).slice(0, 4).map((item, index) => chip(318, 290 - index * 36, 258, item, brand.orange, "1 0.96 0.90")),
+    op.text(36, 136, "Recent Timeline", 12, "F2"),
+    timeline(summary.timeline, 40, 108, 2),
+    files.length ? op.text(318, 136, `Files shared: ${files.length}`, 10, "F2", brand.muted, 40) : "",
+    summary.notes ? op.text(318, 112, chunkText(summary.notes, 46)[0], 8.8, "F1", brand.muted, 52) : "",
+    op.footer(3),
+  ].join("\n");
 
-  const contents = page3 ? [page1, page2, page3] : [page1, page2];
+  const contents = [page1, page2, page3];
   const pageObjectStart = 6;
   const contentObjectStart = pageObjectStart + contents.length;
   const pageRefs = contents.map((_, index) => `${pageObjectStart + index} 0 R`).join(" ");
