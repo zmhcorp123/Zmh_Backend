@@ -119,6 +119,84 @@ router.get("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
   res.json({ ok: true, user: publicUser(req.user), stats: { bookings, invoices, notifications, tickets } });
 }));
 
+router.get("/dashboard/summary", requireAuth, asyncHandler(async (req, res) => {
+  const filter = req.user.role === "admin" ? {} : { user: req.user._id };
+  const invoiceFilter = req.user.role === "admin" ? {} : { user: req.user._id };
+  const notificationFilter = req.user.role === "admin" ? {} : { user: req.user._id };
+
+  const [
+    bookingsCount,
+    invoicesCount,
+    unreadNotifications,
+    ticketsCount,
+    bookings,
+    invoices,
+    notifications,
+  ] = await Promise.all([
+    Booking.countDocuments(filter),
+    Invoice.countDocuments(invoiceFilter),
+    Notification.countDocuments({ ...notificationFilter, readAt: null }),
+    SupportTicket.countDocuments(filter),
+    Booking.find(filter)
+      .select("companyName email address services activeServices packageName packagePrice assignedStaff serviceStartDate requestedDate nextBillingDate progressPercent paymentStatus status updatedAt createdAt")
+      .sort({ updatedAt: -1 })
+      .limit(50)
+      .lean(),
+    Invoice.find(invoiceFilter)
+      .select("invoice company amount currency status dueDate message createdAt updatedAt")
+      .sort({ createdAt: -1 })
+      .limit(12)
+      .lean(),
+    Notification.find(notificationFilter)
+      .select("title body type readAt createdAt")
+      .sort({ createdAt: -1 })
+      .limit(12)
+      .lean(),
+  ]);
+
+  const orderIds = bookings.map((booking) => booking._id);
+  const progress = orderIds.length
+    ? await OrderProgress.find({ order: { $in: orderIds } })
+      .select("order title description status progressPercent happenedAt")
+      .sort({ happenedAt: -1 })
+      .lean()
+    : [];
+
+  const progressByOrder = progress.reduce((map, item) => {
+    const key = String(item.order);
+    if (!map[key]) map[key] = item;
+    return map;
+  }, {});
+
+  const latestInvoiceByCompany = invoices.reduce((map, invoice) => {
+    if (invoice.company && !map[invoice.company]) map[invoice.company] = invoice;
+    return map;
+  }, {});
+
+  const services = bookings.map((booking) => ({
+    ...booking,
+    activeServices: booking.activeServices?.length ? booking.activeServices : booking.services || [],
+    latestProgress: progressByOrder[String(booking._id)] || null,
+    latestInvoice: latestInvoiceByCompany[booking.companyName] || null,
+    progressPercent: Number(booking.progressPercent || progressByOrder[String(booking._id)]?.progressPercent || 0),
+  }));
+
+  res.json({
+    ok: true,
+    user: publicUser(req.user),
+    stats: {
+      bookings: bookingsCount,
+      invoices: invoicesCount,
+      notifications: unreadNotifications,
+      tickets: ticketsCount,
+    },
+    bookings,
+    services,
+    invoices: invoices.map((invoice) => ({ ...invoice, billingMonth: billMonth(invoice), pdfAvailable: true })),
+    notifications,
+  });
+}));
+
 router.patch("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "email") && String(req.body.email || "").trim() !== req.user.email) {
     const error = new Error("Email address cannot be changed after account creation.");

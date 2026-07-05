@@ -99,8 +99,10 @@ router.post("/", attachUserIfPresent, asyncHandler(async (req, res) => {
   if (req.user?.email && !payload.email) payload.email = req.user.email;
   if (req.user?._id) payload.user = req.user._id;
   const booking = await Booking.create(payload);
-  const salesEmailSent = await notifySalesOfBooking(booking, req.user);
-  res.status(201).json({ ok: true, booking, salesEmailSent });
+  notifySalesOfBooking(booking, req.user).catch((error) => {
+    console.error("[sales booking email failed]", error.message);
+  });
+  res.status(201).json({ ok: true, booking, salesEmailQueued: true });
 }));
 
 router.get("/", requireAuth, asyncHandler(async (req, res) => {

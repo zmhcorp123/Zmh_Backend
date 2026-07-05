@@ -4,6 +4,10 @@ const { asyncHandler } = require("../utils/asyncHandler");
 
 const router = express.Router();
 
+function cachePublicSettings(res) {
+  res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+}
+
 function normalizeLegacyFeatures(features) {
   if (Array.isArray(features)) return features;
   if (typeof features === "string") return features.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
@@ -23,7 +27,8 @@ function normalizeLegacyPackage(item, index) {
 }
 
 router.get("/packages", asyncHandler(async (_req, res) => {
-  const pricing = await PackagePricing.find({ status: "active" }).sort({ displayOrder: 1, createdAt: 1 });
+  cachePublicSettings(res);
+  const pricing = await PackagePricing.find({ status: "active" }).sort({ displayOrder: 1, createdAt: 1 }).lean();
   if (pricing.length) {
     return res.json({
       ok: true,
@@ -43,18 +48,20 @@ router.get("/packages", asyncHandler(async (_req, res) => {
       })),
     });
   }
-  const setting = await Setting.findOne({ key: "packages" });
+  const setting = await Setting.findOne({ key: "packages" }).lean();
   const packages = Array.isArray(setting?.value) ? setting.value.map(normalizeLegacyPackage) : null;
   res.json({ ok: true, packages });
 }));
 
 router.get("/company", asyncHandler(async (_req, res) => {
-  const setting = await Setting.findOne({ key: "companyDetails" });
+  cachePublicSettings(res);
+  const setting = await Setting.findOne({ key: "companyDetails" }).lean();
   res.json({ ok: true, companyDetails: setting?.value || {} });
 }));
 
 router.get("/team-profiles", asyncHandler(async (_req, res) => {
-  const setting = await Setting.findOne({ key: "teamProfiles" });
+  cachePublicSettings(res);
+  const setting = await Setting.findOne({ key: "teamProfiles" }).lean();
   res.json({ ok: true, teamProfiles: Array.isArray(setting?.value) ? setting.value : null });
 }));
 

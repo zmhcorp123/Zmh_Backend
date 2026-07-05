@@ -32,15 +32,17 @@ router.post("/", asyncHandler(async (req, res) => {
   }
 
   const contact = await Contact.create({ name, company, email, phone, message });
-  await sendEmail({
+  res.status(201).json({ ok: true, contact, message: "Inquiry received." });
+
+  sendEmail({
     to: inquiryRecipients(),
     from: EMAIL_SENDERS.sales,
     subject: `New ZMH inquiry from ${name}`,
     text: `${name} (${email}) from ${company || "No company"} wrote: ${message}`,
     html: `<p><strong>${escapeHtml(name)}</strong> (${escapeHtml(email)}) from ${escapeHtml(company || "No company")} wrote:</p><p>${escapeHtml(message)}</p><p>Phone: ${escapeHtml(phone || "Not provided")}</p>`,
+  }).catch((error) => {
+    console.error("[contact email failed]", error.message);
   });
-
-  res.status(201).json({ ok: true, contact, message: "Inquiry received." });
 }));
 
 module.exports = router;

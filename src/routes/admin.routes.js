@@ -9,6 +9,8 @@ const router = express.Router();
 
 router.use(requireAuth, requireAdmin);
 
+const ADMIN_LIST_LIMIT = 100;
+
 function bookingCustomerEmail(booking) {
   return booking.email || booking.user?.email || "";
 }
@@ -130,9 +132,9 @@ async function buildOrderSummary(order) {
   const orderUserId = order.user?._id || order.user;
   if (orderUserId) invoiceFilters.unshift({ user: orderUserId });
   const [progress, invoices, accountSetting] = await Promise.all([
-    OrderProgress.find({ order: order._id }).populate("admin", "name email").sort({ happenedAt: -1 }),
-    Invoice.find({ $or: invoiceFilters }).sort({ createdAt: -1 }).limit(20),
-    Setting.findOne({ key: "accountDetails" }),
+    OrderProgress.find({ order: order._id }).populate("admin", "name email").sort({ happenedAt: -1 }).lean(),
+    Invoice.find({ $or: invoiceFilters }).sort({ createdAt: -1 }).limit(20).lean(),
+    Setting.findOne({ key: "accountDetails" }).lean(),
   ]);
   const serviceList = order.activeServices?.length ? order.activeServices : order.services || [];
   const completed = progress.filter((item) => item.status === "completed").map((item) => item.title);
@@ -731,13 +733,31 @@ async function sendBookingDecisionEmail(booking) {
 }
 
 router.get("/users", asyncHandler(async (_req, res) => {
-  const users = await User.find().select("-passwordHash").sort({ createdAt: -1 });
+  const users = await User.find().select("-passwordHash").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean();
   res.json({ ok: true, users });
 }));
 
 router.get("/approvals", asyncHandler(async (_req, res) => {
-  const users = await User.find({ status: "pending" }).select("-passwordHash").sort({ createdAt: -1 });
+  const users = await User.find({ status: "pending" }).select("-passwordHash").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean();
   res.json({ ok: true, users });
+}));
+
+router.get("/summary", asyncHandler(async (_req, res) => {
+  const [users, bookings, bills, payments, tickets, archivedTickets] = await Promise.all([
+    User.find().select("-passwordHash").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean(),
+    Booking.find().populate("user", "name email company").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean(),
+    Invoice.find().populate("user", "name email company").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean(),
+    PaymentSubmission.find()
+      .populate("user", "name email company phone")
+      .populate("order", "companyName packageName packagePrice nextBillingDate paymentStatus")
+      .populate("invoice")
+      .sort({ createdAt: -1 })
+      .limit(ADMIN_LIST_LIMIT)
+      .lean(),
+    SupportTicket.find({ status: { $ne: "resolved" } }).populate("user", "name email company phone").populate("replies.admin", "name email").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean(),
+    SupportTicket.find({ status: "resolved" }).populate("user", "name email company phone").populate("replies.admin", "name email").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean(),
+  ]);
+  res.json({ ok: true, users, bookings, bills, payments, tickets, archivedTickets });
 }));
 
 async function sendApprovalEmail(user) {
@@ -817,7 +837,7 @@ router.patch("/users/:id", asyncHandler(async (req, res) => {
 }));
 
 router.get("/bookings", asyncHandler(async (_req, res) => {
-  const bookings = await Booking.find().populate("user", "name email company").sort({ createdAt: -1 });
+  const bookings = await Booking.find().populate("user", "name email company").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean();
   res.json({ ok: true, bookings });
 }));
 
@@ -877,7 +897,7 @@ router.get("/orders", asyncHandler(async (req, res) => {
     ];
   }
   const [orders, total] = await Promise.all([
-    Booking.find(filter).populate("user", "name email company phone").sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+    Booking.find(filter).populate("user", "name email company phone").sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     Booking.countDocuments(filter),
   ]);
   res.json({ ok: true, orders, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
@@ -1034,12 +1054,12 @@ router.post("/orders/:id/send-invoice-summary", asyncHandler(async (req, res) =>
 }));
 
 router.get("/settings", asyncHandler(async (_req, res) => {
-  const settings = await Setting.find().sort({ key: 1 });
+  const settings = await Setting.find().sort({ key: 1 }).lean();
   res.json({ ok: true, settings });
 }));
 
 router.get("/bills", asyncHandler(async (_req, res) => {
-  const bills = await Invoice.find().populate("user", "name email company").sort({ createdAt: -1 });
+  const bills = await Invoice.find().populate("user", "name email company").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean();
   res.json({ ok: true, bills });
 }));
 
@@ -1124,7 +1144,9 @@ router.get("/payments", asyncHandler(async (_req, res) => {
     .populate("user", "name email company phone")
     .populate("order", "companyName packageName packagePrice nextBillingDate paymentStatus")
     .populate("invoice")
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .limit(ADMIN_LIST_LIMIT)
+    .lean();
   res.json({ ok: true, payments });
 }));
 
@@ -1263,9 +1285,9 @@ router.post("/settings", asyncHandler(async (req, res) => {
 }));
 
 router.get("/pricing", asyncHandler(async (_req, res) => {
-  const packages = await PackagePricing.find().sort({ displayOrder: 1, createdAt: 1 });
+  const packages = await PackagePricing.find().sort({ displayOrder: 1, createdAt: 1 }).lean();
   if (packages.length) return res.json({ ok: true, packages: packages.map(publicPackage) });
-  const setting = await Setting.findOne({ key: "packages" });
+  const setting = await Setting.findOne({ key: "packages" }).lean();
   const legacyPackages = Array.isArray(setting?.value) ? setting.value.map(legacyPackage) : [];
   res.json({ ok: true, packages: legacyPackages });
 }));
@@ -1314,7 +1336,7 @@ router.patch("/pricing/:slug", asyncHandler(async (req, res) => {
 router.get("/support-tickets", asyncHandler(async (req, res) => {
   const filter = req.query.archived === "true" ? { status: "resolved" } : { status: { $ne: "resolved" } };
   await SupportTicket.updateMany({ status: "in review" }, { status: "in progress" });
-  const tickets = await SupportTicket.find(filter).populate("user", "name email company phone").populate("replies.admin", "name email").sort({ createdAt: -1 });
+  const tickets = await SupportTicket.find(filter).populate("user", "name email company phone").populate("replies.admin", "name email").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean();
   res.json({ ok: true, tickets });
 }));
 

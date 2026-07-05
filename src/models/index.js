@@ -14,6 +14,8 @@ const userSchema = new mongoose.Schema({
   isEmailVerified: { type: Boolean, default: false },
 }, { timestamps: true });
 
+userSchema.index({ status: 1, role: 1, createdAt: -1 });
+
 const otpSchema = new mongoose.Schema({
   email: { type: String, trim: true, lowercase: true, required: true, index: true },
   codeHash: { type: String, required: true },
@@ -62,6 +64,8 @@ const bookingSchema = new mongoose.Schema({
 
 bookingSchema.index({ status: 1, createdAt: -1 });
 bookingSchema.index({ user: 1, status: 1 });
+bookingSchema.index({ user: 1, updatedAt: -1 });
+bookingSchema.index({ createdAt: -1 });
 
 const contactSchema = new mongoose.Schema({
   name: { type: String, trim: true, required: true },
@@ -71,6 +75,8 @@ const contactSchema = new mongoose.Schema({
   message: { type: String, trim: true, required: true },
   status: { type: String, enum: ["new", "contacted", "closed"], default: "new" },
 }, { timestamps: true });
+
+contactSchema.index({ createdAt: -1 });
 
 const invoiceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
@@ -86,6 +92,7 @@ const invoiceSchema = new mongoose.Schema({
 
 invoiceSchema.index({ user: 1, createdAt: -1 });
 invoiceSchema.index({ company: 1, createdAt: -1 });
+invoiceSchema.index({ createdAt: -1 });
 
 const orderProgressSchema = new mongoose.Schema({
   order: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", required: true, index: true },
@@ -136,6 +143,8 @@ const emailHistorySchema = new mongoose.Schema({
   error: { type: String, trim: true, default: "" },
 }, { timestamps: true });
 
+emailHistorySchema.index({ createdAt: -1 });
+
 const paymentSubmissionSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
   order: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
@@ -158,6 +167,7 @@ const paymentSubmissionSchema = new mongoose.Schema({
 
 paymentSubmissionSchema.index({ invoice: 1, status: 1 });
 paymentSubmissionSchema.index({ user: 1, invoice: 1, status: 1 });
+paymentSubmissionSchema.index({ createdAt: -1 });
 
 const supportTicketSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -176,6 +186,7 @@ const supportTicketSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 supportTicketSchema.index({ user: 1, createdAt: -1 });
+supportTicketSchema.index({ status: 1, createdAt: -1 });
 
 const notificationSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
