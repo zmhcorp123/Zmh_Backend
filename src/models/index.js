@@ -185,6 +185,8 @@ const notificationSchema = new mongoose.Schema({
   readAt: { type: Date, default: null },
 }, { timestamps: true });
 
+notificationSchema.index({ user: 1, readAt: 1, createdAt: -1 });
+
 const settingSchema = new mongoose.Schema({
   key: { type: String, trim: true, unique: true, required: true },
   value: { type: mongoose.Schema.Types.Mixed, default: null },

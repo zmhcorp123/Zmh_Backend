@@ -35,7 +35,7 @@ function normalizePaymentStatus(value = "") {
 }
 
 async function accountDetails() {
-  const setting = await Setting.findOne({ key: "accountDetails" });
+  const setting = await Setting.findOne({ key: "accountDetails" }).lean();
   return setting?.value || {};
 }
 
@@ -110,15 +110,23 @@ function createBillPdfBuffer(invoice, user, bank = {}) {
 }
 
 router.get("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
-  const bookings = await Booking.countDocuments({ user: req.user._id });
-  const invoices = await Invoice.countDocuments({ user: req.user._id });
-  const notifications = await Notification.countDocuments({ user: req.user._id, readAt: null });
-  const tickets = await SupportTicket.countDocuments({ user: req.user._id });
+  const [bookings, invoices, notifications, tickets] = await Promise.all([
+    Booking.countDocuments({ user: req.user._id }),
+    Invoice.countDocuments({ user: req.user._id }),
+    Notification.countDocuments({ user: req.user._id, readAt: null }),
+    SupportTicket.countDocuments({ user: req.user._id }),
+  ]);
   res.json({ ok: true, user: publicUser(req.user), stats: { bookings, invoices, notifications, tickets } });
 }));
 
 router.patch("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
-  const allowed = ["name", "username", "company", "phone", "email"];
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, "email") && String(req.body.email || "").trim() !== req.user.email) {
+    const error = new Error("Email address cannot be changed after account creation.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const allowed = ["name", "username", "company", "phone"];
   const update = {};
 
   for (const field of allowed) {
@@ -138,19 +146,6 @@ router.patch("/dashboard/profile", requireAuth, asyncHandler(async (req, res) =>
     throw error;
   }
 
-  if (update.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(update.email)) {
-    const error = new Error("Enter a valid email address");
-    error.statusCode = 400;
-    throw error;
-  }
-  if (update.email && update.email !== req.user.email) {
-    const exists = await User.findOne({ email: update.email, _id: { $ne: req.user._id } });
-    if (exists) {
-      const error = new Error("Email is already in use");
-      error.statusCode = 409;
-      throw error;
-    }
-  }
   if (update.username && !/^[a-zA-Z0-9_.-]{3,32}$/.test(update.username)) {
     const error = new Error("Username must be 3-32 characters and use only letters, numbers, dots, dashes, or underscores");
     error.statusCode = 400;
@@ -188,14 +183,14 @@ router.patch("/dashboard/password", requireAuth, asyncHandler(async (req, res) =
 
 router.get("/invoices", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
-  const invoices = await Invoice.find(filter).sort({ createdAt: -1 });
-  const submissions = await PaymentSubmission.find({ invoice: { $in: invoices.map((invoice) => invoice._id) } }).sort({ createdAt: -1 });
+  const invoices = await Invoice.find(filter).sort({ createdAt: -1 }).lean();
+  const submissions = await PaymentSubmission.find({ invoice: { $in: invoices.map((invoice) => invoice._id) } }).sort({ createdAt: -1 }).lean();
   const submissionByInvoice = submissions.reduce((map, item) => {
     const key = String(item.invoice);
     if (!map[key]) map[key] = item;
     return map;
   }, {});
-  res.json({ ok: true, invoices: invoices.map((invoice) => ({ ...invoice.toObject(), billingMonth: billMonth(invoice), pdfAvailable: true, paymentSubmission: submissionByInvoice[String(invoice._id)] || null })) });
+  res.json({ ok: true, invoices: invoices.map((invoice) => ({ ...invoice, billingMonth: billMonth(invoice), pdfAvailable: true, paymentSubmission: submissionByInvoice[String(invoice._id)] || null })) });
 }));
 
 router.get("/invoices/:id/pdf", requireAuth, asyncHandler(async (req, res) => {
@@ -218,12 +213,12 @@ router.get("/invoices/:id/pdf", requireAuth, asyncHandler(async (req, res) => {
 
 router.get("/dashboard/services", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
-  const orders = await Booking.find(filter).sort({ updatedAt: -1 }).limit(20);
+  const orders = await Booking.find(filter).sort({ updatedAt: -1 }).limit(20).lean();
   const orderIds = orders.map((order) => order._id);
   const [progress, invoices, submissions] = await Promise.all([
-    OrderProgress.find({ order: { $in: orderIds } }).populate("admin", "name email").sort({ happenedAt: -1 }),
-    Invoice.find(req.user.role === "admin" ? {} : { user: req.user._id }).sort({ createdAt: -1 }),
-    PaymentSubmission.find(req.user.role === "admin" ? {} : { user: req.user._id }).sort({ createdAt: -1 }),
+    OrderProgress.find({ order: { $in: orderIds } }).populate("admin", "name email").sort({ happenedAt: -1 }).lean(),
+    Invoice.find(req.user.role === "admin" ? {} : { user: req.user._id }).sort({ createdAt: -1 }).lean(),
+    PaymentSubmission.find(req.user.role === "admin" ? {} : { user: req.user._id }).sort({ createdAt: -1 }).lean(),
   ]);
   const progressByOrder = progress.reduce((map, item) => {
     const key = String(item.order);
@@ -242,9 +237,9 @@ router.get("/dashboard/services", requireAuth, asyncHandler(async (req, res) => 
     const activeServices = order.activeServices?.length ? order.activeServices : order.services || [];
     const orderInvoices = invoices.filter((invoice) => String(invoice.user || "") === String(order.user || "") || invoice.company === order.companyName);
     const latestInvoice = orderInvoices[0] || null;
-    const paymentHistory = orderInvoices.flatMap((invoice) => (submissionsByInvoice[String(invoice._id)] || []).map((submission) => ({ ...submission.toObject(), invoice })));
+    const paymentHistory = orderInvoices.flatMap((invoice) => (submissionsByInvoice[String(invoice._id)] || []).map((submission) => ({ ...submission, invoice })));
     return {
-      ...order.toObject(),
+      ...order,
       activeServices,
       progressTimeline: timeline,
       latestProgress: timeline[0] || null,
@@ -395,14 +390,17 @@ router.post("/payments/confirm", requireAuth, asyncHandler(async (req, res) => {
 
 router.get("/notifications", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
-  const notifications = await Notification.find(filter).sort({ createdAt: -1 });
+  const notifications = await Notification.find(filter).sort({ createdAt: -1 }).limit(50).lean();
+  if (req.user.role !== "admin") {
+    await Notification.updateMany({ user: req.user._id, readAt: null }, { $set: { readAt: new Date() } });
+  }
   res.json({ ok: true, notifications });
 }));
 
 router.get("/support-tickets", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
   await SupportTicket.updateMany({ ...filter, status: "in review" }, { status: "in progress" });
-  const tickets = await SupportTicket.find(filter).populate("user", "name email company phone").sort({ createdAt: -1 });
+  const tickets = await SupportTicket.find(filter).populate("user", "name email company phone").sort({ createdAt: -1 }).lean();
   res.json({ ok: true, tickets });
 }));
 

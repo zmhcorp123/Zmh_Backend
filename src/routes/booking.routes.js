@@ -105,7 +105,7 @@ router.post("/", attachUserIfPresent, asyncHandler(async (req, res) => {
 
 router.get("/", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
-  const bookings = await Booking.find(filter).sort({ createdAt: -1 });
+  const bookings = await Booking.find(filter).sort({ createdAt: -1 }).limit(50).lean();
   res.json({ ok: true, bookings });
 }));
 
