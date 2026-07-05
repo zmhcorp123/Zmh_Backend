@@ -9,6 +9,8 @@ const { publicUser } = require("../utils/publicUser");
 const { signToken } = require("../middleware/auth");
 
 const router = express.Router();
+const PASSWORD_HASH_ROUNDS = Number(process.env.PASSWORD_HASH_ROUNDS || 10);
+const OTP_HASH_ROUNDS = Number(process.env.OTP_HASH_ROUNDS || 8);
 
 function required(value, message) {
   if (!value) {
@@ -30,15 +32,17 @@ function otpTiming() {
 
 async function createAndSendOtp(email, purpose = "signup") {
   const code = crypto.randomInt(100000, 999999).toString();
-  const codeHash = await bcrypt.hash(code, 10);
+  const codeHash = await bcrypt.hash(code, OTP_HASH_ROUNDS);
   const timing = otpTiming();
   await Otp.create({ email, codeHash, purpose, ...timing });
-  await sendEmail({
+  sendEmail({
     to: email,
     from: EMAIL_SENDERS.notifications,
     subject: "Your ZMH verification code",
     text: `Your ZMH verification code is ${code}. It expires in ${timing.expiryMinutes} minutes.`,
     html: `<p>Your ZMH verification code is <strong>${code}</strong>.</p><p>It expires in ${timing.expiryMinutes} minutes.</p>`,
+  }).catch((error) => {
+    console.error("[otp email failed]", error.message);
   });
 }
 
@@ -78,10 +82,10 @@ router.post("/signup", asyncHandler(async (req, res) => {
     throw error;
   }
 
-  const passwordHash = await bcrypt.hash(password, 12);
+  const passwordHash = await bcrypt.hash(password, PASSWORD_HASH_ROUNDS);
   const user = await User.create({ name, email, passwordHash, company, phone, status: "pending", isEmailVerified: false });
   await createAndSendOtp(user.email, "signup");
-  await notifyAccountsOfSignup(user);
+  notifyAccountsOfSignup(user);
   res.status(201).json({
     ok: true,
     user: publicUser(user),
@@ -206,7 +210,7 @@ router.post("/reset-password", asyncHandler(async (req, res) => {
     throw error;
   }
 
-  const passwordHash = await bcrypt.hash(password, 12);
+  const passwordHash = await bcrypt.hash(password, PASSWORD_HASH_ROUNDS);
   await User.findOneAndUpdate({ email: email.toLowerCase() }, { passwordHash });
   record.usedAt = new Date();
   await record.save();
