@@ -230,6 +230,64 @@ function invoiceMeta(order, summary) {
   };
 }
 
+async function ensureOrderInvoice(order, summary) {
+  const meta = invoiceMeta(order, summary);
+  const userId = order.user?._id || order.user || null;
+  let invoice = await Invoice.findOne({ invoice: meta.invoiceNumber });
+  const invoicePayload = {
+    user: userId,
+    company: order.companyName,
+    amount: Number(meta.total || 0),
+    currency: meta.currency || "USD",
+    status: order.paymentStatus === "paid" ? "paid" : "sent",
+    dueDate: order.nextBillingDate || null,
+    lineItems: [{
+      label: summary.package.name || "Service package",
+      amount: Number(meta.total || 0),
+    }],
+    message: `Invoice summary sent for ${order.companyName}.`,
+  };
+
+  if (!invoice) {
+    return Invoice.create({ ...invoicePayload, invoice: meta.invoiceNumber });
+  }
+
+  let changed = false;
+  if (!invoice.user && userId) {
+    invoice.user = userId;
+    changed = true;
+  }
+  if (!invoice.company) {
+    invoice.company = invoicePayload.company;
+    changed = true;
+  }
+  if (!invoice.amount) {
+    invoice.amount = invoicePayload.amount;
+    changed = true;
+  }
+  if (!invoice.currency) {
+    invoice.currency = invoicePayload.currency;
+    changed = true;
+  }
+  if (!invoice.dueDate && invoicePayload.dueDate) {
+    invoice.dueDate = invoicePayload.dueDate;
+    changed = true;
+  }
+  if (!invoice.lineItems?.length) {
+    invoice.lineItems = invoicePayload.lineItems;
+    changed = true;
+  }
+  if (!invoice.message) {
+    invoice.message = invoicePayload.message;
+    changed = true;
+  }
+  if (invoice.status === "draft") {
+    invoice.status = invoicePayload.status;
+    changed = true;
+  }
+  return changed ? invoice.save() : invoice;
+}
+
 function chunkText(text, length = 72) {
   const words = String(text || "").split(/\s+/).filter(Boolean);
   const lines = [];
@@ -1177,11 +1235,14 @@ router.post("/orders/:id/send-invoice-summary", asyncHandler(async (req, res) =>
     error.statusCode = 429;
     throw error;
   }
-  const summary = await buildOrderSummary(order);
+  let summary = await buildOrderSummary(order);
+  const invoice = await ensureOrderInvoice(order, summary);
+  summary = await buildOrderSummary(order);
   const pdf = createExecutiveSummaryPdfBuffer(order, summary);
   const email = buildExecutiveSummaryEmail(order, summary);
   const history = new EmailHistory({
     order: order._id,
+    invoice: invoice._id,
     to,
     from: EMAIL_ADDRESSES.billing,
     subject: email.subject,

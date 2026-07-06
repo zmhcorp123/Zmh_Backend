@@ -1,6 +1,6 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const { Invoice, Notification, Booking, OrderProgress, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
+const { EmailHistory, Invoice, Notification, Booking, OrderProgress, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
 const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
@@ -32,6 +32,83 @@ function escapeRegex(value = "") {
 
 function normalizePaymentStatus(value = "") {
   return String(value || "").replace(/-/g, " ").toLowerCase();
+}
+
+function uniqueValues(values = []) {
+  return [...new Set(values.map((value) => cleanString(value)).filter(Boolean))];
+}
+
+async function clientInvoiceFilter(user) {
+  if (user.role === "admin") return {};
+  const bookings = await Booking.find({ user: user._id }).select("companyName").lean();
+  const companies = uniqueValues([
+    user.company,
+    user.name,
+    ...bookings.map((booking) => booking.companyName),
+  ]);
+  const filters = [{ user: user._id }];
+  if (companies.length) filters.push({ user: null, company: { $in: companies } });
+  return { $or: filters };
+}
+
+async function attachUnlinkedInvoices(invoices = [], user) {
+  if (user.role === "admin") return;
+  const unlinkedIds = invoices.filter((invoice) => !invoice.user).map((invoice) => invoice._id);
+  if (unlinkedIds.length) {
+    await Invoice.updateMany({ _id: { $in: unlinkedIds }, user: null }, { $set: { user: user._id } });
+    invoices.forEach((invoice) => {
+      if (!invoice.user) invoice.user = user._id;
+    });
+  }
+}
+
+function generatedInvoiceNumber(order) {
+  const year = new Date(order.createdAt || Date.now()).getFullYear();
+  return `INV-${year}-${String(order._id).slice(-6).toUpperCase()}`;
+}
+
+function numericPrice(value) {
+  const amount = Number(String(value || "").replace(/[^0-9.]/g, ""));
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+async function ensureLegacySentInvoices(user, bookings = null) {
+  if (user.role === "admin") return [];
+  const orders = bookings || await Booking.find({ user: user._id }).select("companyName packageName packagePrice nextBillingDate createdAt").lean();
+  if (!orders.length) return [];
+  const histories = await EmailHistory.find({
+    order: { $in: orders.map((order) => order._id) },
+    status: { $in: ["sent", "skipped"] },
+  }).select("order").lean();
+  const sentOrderIds = new Set(histories.map((history) => String(history.order)));
+  const created = [];
+  for (const order of orders) {
+    if (!sentOrderIds.has(String(order._id))) continue;
+    const invoiceNumber = generatedInvoiceNumber(order);
+    const existing = await Invoice.findOne({ invoice: invoiceNumber });
+    if (existing) {
+      if (!existing.user) {
+        existing.user = user._id;
+        await existing.save();
+      }
+      created.push(existing.toObject ? existing.toObject() : existing);
+      continue;
+    }
+    const amount = numericPrice(order.packagePrice);
+    const invoice = await Invoice.create({
+      user: user._id,
+      invoice: invoiceNumber,
+      company: order.companyName,
+      amount,
+      currency: "USD",
+      status: "sent",
+      dueDate: order.nextBillingDate || null,
+      lineItems: [{ label: order.packageName || "Service package", amount }],
+      message: `Invoice summary sent for ${order.companyName}.`,
+    });
+    created.push(invoice.toObject());
+  }
+  return created;
 }
 
 async function accountDetails() {
@@ -121,7 +198,8 @@ router.get("/dashboard/profile", requireAuth, asyncHandler(async (req, res) => {
 
 router.get("/dashboard/summary", requireAuth, asyncHandler(async (req, res) => {
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
-  const invoiceFilter = req.user.role === "admin" ? {} : { user: req.user._id };
+  await ensureLegacySentInvoices(req.user);
+  const invoiceFilter = await clientInvoiceFilter(req.user);
   const notificationFilter = req.user.role === "admin" ? {} : { user: req.user._id };
 
   const [
@@ -167,6 +245,7 @@ router.get("/dashboard/summary", requireAuth, asyncHandler(async (req, res) => {
     if (!map[key]) map[key] = item;
     return map;
   }, {});
+  await attachUnlinkedInvoices(invoices, req.user);
 
   const latestInvoiceByCompany = invoices.reduce((map, invoice) => {
     if (invoice.company && !map[invoice.company]) map[invoice.company] = invoice;
@@ -260,8 +339,10 @@ router.patch("/dashboard/password", requireAuth, asyncHandler(async (req, res) =
 }));
 
 router.get("/invoices", requireAuth, asyncHandler(async (req, res) => {
-  const filter = req.user.role === "admin" ? {} : { user: req.user._id };
+  await ensureLegacySentInvoices(req.user);
+  const filter = await clientInvoiceFilter(req.user);
   const invoices = await Invoice.find(filter).sort({ createdAt: -1 }).lean();
+  await attachUnlinkedInvoices(invoices, req.user);
   const submissions = await PaymentSubmission.find({ invoice: { $in: invoices.map((invoice) => invoice._id) } }).sort({ createdAt: -1 }).lean();
   const submissionByInvoice = submissions.reduce((map, item) => {
     const key = String(item.invoice);
@@ -272,7 +353,8 @@ router.get("/invoices", requireAuth, asyncHandler(async (req, res) => {
 }));
 
 router.get("/invoices/:id/pdf", requireAuth, asyncHandler(async (req, res) => {
-  const filter = req.user.role === "admin" ? { _id: req.params.id } : { _id: req.params.id, user: req.user._id };
+  const accessFilter = await clientInvoiceFilter(req.user);
+  const filter = req.user.role === "admin" ? { _id: req.params.id } : { _id: req.params.id, ...accessFilter };
   const invoice = await Invoice.findOne(filter);
   if (!invoice) {
     const error = new Error("Invoice not found");
@@ -293,11 +375,14 @@ router.get("/dashboard/services", requireAuth, asyncHandler(async (req, res) => 
   const filter = req.user.role === "admin" ? {} : { user: req.user._id };
   const orders = await Booking.find(filter).sort({ updatedAt: -1 }).limit(20).lean();
   const orderIds = orders.map((order) => order._id);
+  await ensureLegacySentInvoices(req.user, orders);
+  const invoiceFilter = await clientInvoiceFilter(req.user);
   const [progress, invoices, submissions] = await Promise.all([
     OrderProgress.find({ order: { $in: orderIds } }).populate("admin", "name email").sort({ happenedAt: -1 }).lean(),
-    Invoice.find(req.user.role === "admin" ? {} : { user: req.user._id }).sort({ createdAt: -1 }).lean(),
+    Invoice.find(invoiceFilter).sort({ createdAt: -1 }).lean(),
     PaymentSubmission.find(req.user.role === "admin" ? {} : { user: req.user._id }).sort({ createdAt: -1 }).lean(),
   ]);
+  await attachUnlinkedInvoices(invoices, req.user);
   const progressByOrder = progress.reduce((map, item) => {
     const key = String(item.order);
     if (!map[key]) map[key] = [];
@@ -348,7 +433,8 @@ router.post("/payments/submit", requireAuth, asyncHandler(async (req, res) => {
     throw error;
   }
 
-  const invoice = await Invoice.findOne({ _id: invoiceId, user: req.user._id });
+  const accessFilter = await clientInvoiceFilter(req.user);
+  const invoice = await Invoice.findOne({ _id: invoiceId, ...accessFilter });
   if (!invoice) {
     const error = new Error("Invoice not found.");
     error.statusCode = 404;
@@ -358,6 +444,10 @@ router.post("/payments/submit", requireAuth, asyncHandler(async (req, res) => {
     const error = new Error("This invoice is already marked paid.");
     error.statusCode = 409;
     throw error;
+  }
+  if (!invoice.user) {
+    invoice.user = req.user._id;
+    await invoice.save();
   }
   const existing = await PaymentSubmission.findOne({ invoice: invoice._id, user: req.user._id, status: "submitted" });
   if (existing) {
@@ -416,13 +506,19 @@ router.post("/payments/confirm", requireAuth, asyncHandler(async (req, res) => {
     error.statusCode = 400;
     throw error;
   }
+  await ensureLegacySentInvoices(req.user);
+  const paymentInvoiceFilter = await clientInvoiceFilter(req.user);
   const invoice = invoiceId
-    ? await Invoice.findOne({ _id: invoiceId, user: req.user._id })
-    : await Invoice.findOne({ invoice: new RegExp(`^${escapeRegex(invoiceNumber)}$`, "i"), user: req.user._id });
+    ? await Invoice.findOne({ _id: invoiceId, ...paymentInvoiceFilter })
+    : await Invoice.findOne({ invoice: new RegExp(`^${escapeRegex(invoiceNumber)}$`, "i"), ...paymentInvoiceFilter });
   if (!invoice) {
     const error = new Error("Invoice not found for your account.");
     error.statusCode = 404;
     throw error;
+  }
+  if (!invoice.user) {
+    invoice.user = req.user._id;
+    await invoice.save();
   }
   if (invoice.status === "paid") {
     const error = new Error("This invoice has already been paid.");
