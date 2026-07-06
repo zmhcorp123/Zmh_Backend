@@ -404,18 +404,21 @@ router.post("/payments/submit", requireAuth, asyncHandler(async (req, res) => {
 }));
 
 router.post("/payments/confirm", requireAuth, asyncHandler(async (req, res) => {
+  const invoiceId = cleanString(req.body?.invoiceId);
   const invoiceNumber = cleanString(req.body?.invoiceNumber).toUpperCase();
-  if (!invoiceNumber) {
-    const error = new Error("Invoice number is required.");
+  if (!invoiceId && !invoiceNumber) {
+    const error = new Error("Invoice is required.");
     error.statusCode = 400;
     throw error;
   }
-  if (!/^[A-Z0-9][A-Z0-9-]{2,40}$/.test(invoiceNumber)) {
+  if (invoiceNumber && !/^[A-Z0-9][A-Z0-9-]{2,40}$/.test(invoiceNumber)) {
     const error = new Error("Enter a valid invoice number.");
     error.statusCode = 400;
     throw error;
   }
-  const invoice = await Invoice.findOne({ invoice: new RegExp(`^${escapeRegex(invoiceNumber)}$`, "i"), user: req.user._id });
+  const invoice = invoiceId
+    ? await Invoice.findOne({ _id: invoiceId, user: req.user._id })
+    : await Invoice.findOne({ invoice: new RegExp(`^${escapeRegex(invoiceNumber)}$`, "i"), user: req.user._id });
   if (!invoice) {
     const error = new Error("Invoice not found for your account.");
     error.statusCode = 404;

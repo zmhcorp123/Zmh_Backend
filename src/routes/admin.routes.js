@@ -1,5 +1,7 @@
 const express = require("express");
-const { ApprovalLog, Booking, EmailHistory, Invoice, Notification, OrderProgress, PackagePricing, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const { ApprovalLog, Booking, EmailHistory, Invoice, Notification, OrderProgress, Otp, PackagePricing, PaymentSubmission, Setting, SupportTicket, User } = require("../models");
 const { sendEmail } = require("../config/email");
 const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
@@ -7,9 +9,33 @@ const { asyncHandler } = require("../utils/asyncHandler");
 
 const router = express.Router();
 
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth);
 
 const ADMIN_LIST_LIMIT = 100;
+const EMPLOYEE_PROGRESS_STATUSES = ["planned", "in progress", "completed", "blocked"];
+
+function employeeOrAdmin(req, _res, next) {
+  if (req.user?.role === "admin") return next();
+  if (req.user?.role === "employee") {
+    if (req.user.mustChangePassword || !req.user.isEmailVerified) {
+      const error = new Error("Employee setup is required before accessing orders");
+      error.statusCode = 403;
+      return next(error);
+    }
+    return next();
+  }
+  const error = new Error("Staff access required");
+  error.statusCode = 403;
+  return next(error);
+}
+
+function staffSummary(summary) {
+  return {
+    ...summary,
+    billing: { ...(summary.billing || {}), invoices: [] },
+    accountDetails: {},
+  };
+}
 
 function bookingCustomerEmail(booking) {
   return booking.email || booking.user?.email || "";
@@ -419,7 +445,7 @@ function createExecutiveSummaryPdfBuffer(order, summary) {
   const page1 = [
     op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"),
     op.rect(0, 632, 612, 160, brand.dark, brand.dark),
-    `${brand.blue} rg 420 632 192 160 re f`,
+    `${brand.dark} rg 420 632 192 160 re f`,
     logo(38, 704),
     op.text(92, 728, "ZMH USA Corp", 18, "F2", brand.white),
     op.text(92, 700, "Company Details", 28, "F2", brand.white, 28),
@@ -458,25 +484,7 @@ function createExecutiveSummaryPdfBuffer(order, summary) {
     op.footer(2),
   ].join("\n");
 
-  const page3 = [
-    op.rect(0, 0, 612, 792, "0.96 0.98 1", "0.96 0.98 1"),
-    logo(36, 742), op.text(88, 760, "ZMH USA Corp", 13, "F2"), op.text(88, 744, "Service Summary", 9, "F2", brand.muted),
-    title(36, 718, "Services"),
-    op.rect(36, 628, 540, 66), op.text(54, 670, summary.package.name, 18, "F2"), op.text(54, 648, summary.package.price, 12, "F2", brand.orange), op.progress(358, 660, 176, progressValue, brand.green), op.text(360, 640, `${progressValue}% complete`, 9, "F2", brand.muted, 34),
-    op.text(36, 592, "Included Services", 12, "F2"),
-    ...services.slice(0, 10).map((item, index) => chip(36 + (index % 2) * 276, 548 - Math.floor(index / 2) * 38, 258, item)),
-    op.text(36, 330, "Completed Services", 12, "F2"),
-    ...(completed.length ? completed : ["Progress updates pending"]).slice(0, 4).map((item, index) => chip(36, 290 - index * 36, 258, item, brand.green, "0.92 0.99 0.96")),
-    op.text(318, 330, "Remaining Services", 12, "F2"),
-    ...(remaining.length ? remaining : ["Scope under review"]).slice(0, 4).map((item, index) => chip(318, 290 - index * 36, 258, item, brand.orange, "1 0.96 0.90")),
-    op.text(36, 136, "Recent Timeline", 12, "F2"),
-    timeline(summary.timeline, 40, 108, 2),
-    files.length ? op.text(318, 136, `Files shared: ${files.length}`, 10, "F2", brand.muted, 40) : "",
-    summary.notes ? op.text(318, 112, chunkText(summary.notes, 46)[0], 8.8, "F1", brand.muted, 52) : "",
-    op.footer(3),
-  ].join("\n");
-
-  const contents = [page1, page2, page3];
+  const contents = [page1, page2];
   const pageObjectStart = 6;
   const contentObjectStart = pageObjectStart + contents.length;
   const pageRefs = contents.map((_, index) => `${pageObjectStart + index} 0 R`).join(" ");
@@ -732,9 +740,159 @@ async function sendBookingDecisionEmail(booking) {
   }
 }
 
+router.get("/summary", employeeOrAdmin, asyncHandler(async (req, res, next) => {
+  if (req.user.role === "admin") return next();
+  const bookings = await Booking.find({ status: "ongoing" }).populate("user", "name email company phone").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean();
+  res.json({ ok: true, users: [], bookings, bills: [], payments: [], tickets: [], archivedTickets: [], employeeOnly: true });
+}));
+
+router.get("/orders", employeeOrAdmin, asyncHandler(async (req, res) => {
+  const page = Math.max(1, Number(req.query.page || 1));
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit || 20)));
+  const search = cleanString(req.query.search);
+  const filter = req.user.role === "employee" ? { status: "ongoing" } : {};
+  if (search) {
+    filter.$or = [
+      { companyName: new RegExp(search, "i") },
+      { email: new RegExp(search, "i") },
+      { phone: new RegExp(search, "i") },
+      { packageName: new RegExp(search, "i") },
+    ];
+  }
+  const [orders, total] = await Promise.all([
+    Booking.find(filter).populate("user", "name email company phone").sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    Booking.countDocuments(filter),
+  ]);
+  res.json({ ok: true, orders, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+}));
+
+router.get("/orders/:id", employeeOrAdmin, asyncHandler(async (req, res) => {
+  const filter = req.user.role === "employee" ? { _id: req.params.id, status: "ongoing" } : { _id: req.params.id };
+  const order = await Booking.findOne(filter).populate("user", "name email company phone");
+  if (!order) {
+    const error = new Error("Order not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const summary = await buildOrderSummary(order);
+  const safeSummary = req.user.role === "employee" ? staffSummary(summary) : summary;
+  res.json({ ok: true, order, progress: safeSummary.timeline, invoices: req.user.role === "employee" ? [] : summary.billing.invoices, summary: safeSummary });
+}));
+
+router.post("/orders/:id/progress", employeeOrAdmin, asyncHandler(async (req, res) => {
+  const filter = req.user.role === "employee" ? { _id: req.params.id, status: "ongoing" } : { _id: req.params.id };
+  const order = await Booking.findOne(filter).populate("user", "name email company phone");
+  if (!order) {
+    const error = new Error("Order not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  const progressPercent = Math.max(0, Math.min(100, Number(req.body.progressPercent) || 0));
+  const title = cleanString(req.body.title || "Customer progress update");
+  const description = cleanString(req.body.description);
+  const customerName = cleanString(req.body.customerName);
+  const customerEmail = cleanString(req.body.customerEmail);
+  const customerPhone = cleanString(req.body.customerPhone);
+  const customerAddress = cleanString(req.body.customerAddress);
+  if (!title || !customerName || !description) {
+    const error = new Error("Title, customer name, and description are required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
+    const error = new Error("Enter a valid customer email");
+    error.statusCode = 400;
+    throw error;
+  }
+  const progress = await OrderProgress.create({
+    order: order._id,
+    title,
+    description,
+    customerName,
+    customerEmail,
+    customerPhone,
+    customerAddress,
+    happenedAt: parseDate(req.body.happenedAt) || new Date(),
+    adminName: cleanString(req.body.adminName || req.user.name),
+    admin: req.user._id,
+    attachments: Array.isArray(req.body.attachments) ? req.body.attachments : [],
+    progressPercent,
+    status: EMPLOYEE_PROGRESS_STATUSES.includes(req.body.status) ? req.body.status : "completed",
+  });
+  order.progressPercent = Math.max(order.progressPercent || 0, progressPercent);
+  await order.save();
+  if (order.user?._id) {
+    await Notification.create({
+      user: order.user._id,
+      title: "Service progress updated",
+      body: `${progress.title} - ${progress.progressPercent}% complete`,
+      type: "order",
+    });
+  }
+  const summary = await buildOrderSummary(order);
+  const safeSummary = req.user.role === "employee" ? staffSummary(summary) : summary;
+  res.status(201).json({ ok: true, order, progress, timeline: safeSummary.timeline, summary: safeSummary });
+}));
+
+router.use(requireAdmin);
+
 router.get("/users", asyncHandler(async (_req, res) => {
   const users = await User.find().select("-passwordHash").sort({ createdAt: -1 }).limit(ADMIN_LIST_LIMIT).lean();
   res.json({ ok: true, users });
+}));
+
+router.post("/users/employee", asyncHandler(async (req, res) => {
+  const name = cleanString(req.body.name);
+  const email = cleanString(req.body.email).toLowerCase();
+  const temporaryPassword = cleanString(req.body.temporaryPassword);
+  if (!name || !email || !temporaryPassword) {
+    const error = new Error("Name, email, and temporary password are required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (temporaryPassword.length < 8) {
+    const error = new Error("Temporary password must be at least 8 characters");
+    error.statusCode = 400;
+    throw error;
+  }
+  const exists = await User.findOne({ email });
+  if (exists) {
+    const error = new Error("Email is already registered");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+  const user = await User.create({
+    name,
+    email,
+    passwordHash,
+    role: "employee",
+    status: "active",
+    isEmailVerified: false,
+    mustChangePassword: true,
+  });
+  const code = crypto.randomInt(100000, 999999).toString();
+  const codeHash = await bcrypt.hash(code, 8);
+  await Otp.create({
+    email,
+    codeHash,
+    purpose: "signup",
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    resendAvailableAt: new Date(Date.now() + 60 * 1000),
+  });
+  await sendEmail({
+    to: email,
+    from: EMAIL_SENDERS.notifications,
+    subject: "Your ZMH employee account",
+    text: `Hi ${name},\n\nYour ZMH employee account has been created.\n\nLogin email: ${email}\nTemporary password: ${temporaryPassword}\nVerification code: ${code}\n\nAfter login, enter the code and set your own password.`,
+    html: `<p>Hi ${escapeHtml(name)},</p><p>Your ZMH employee account has been created.</p><ul><li><strong>Login email:</strong> ${escapeHtml(email)}</li><li><strong>Temporary password:</strong> ${escapeHtml(temporaryPassword)}</li><li><strong>Verification code:</strong> ${escapeHtml(code)}</li></ul><p>After login, enter the code and set your own password.</p>`,
+  }).catch((error) => {
+    console.error("[employee invite email failed]", error.message);
+  });
+
+  const saved = await User.findById(user._id).select("-passwordHash");
+  res.status(201).json({ ok: true, user: saved, message: "Employee created. Temporary password and OTP were emailed." });
 }));
 
 router.get("/approvals", asyncHandler(async (_req, res) => {
@@ -842,7 +1000,7 @@ router.get("/bookings", asyncHandler(async (_req, res) => {
 }));
 
 router.patch("/bookings/:id", asyncHandler(async (req, res) => {
-  const allowed = ["status", "notes", "services", "hours", "afterHours", "crm", "integrationNotes", "requestedDate", "adminResponse", "activeServices", "serviceUpdates", "contactPerson", "packageName", "packagePrice", "assignedStaff", "serviceStartDate", "nextBillingDate", "progressPercent", "paymentStatus", "filesUploaded"];
+  const allowed = ["status", "notes", "services", "operatingDays", "hours", "afterHours", "crm", "integrationNotes", "requestedDate", "adminResponse", "activeServices", "serviceUpdates", "contactPerson", "packageName", "packagePrice", "assignedStaff", "serviceStartDate", "nextBillingDate", "progressPercent", "paymentStatus", "filesUploaded"];
   const update = {};
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(req.body, key)) update[key] = req.body[key];

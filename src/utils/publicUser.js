@@ -5,11 +5,15 @@ function publicUser(user) {
     username: user.username,
     email: user.email,
     company: user.company,
+    country: user.country,
+    countryCode: user.countryCode,
+    phoneCode: user.phoneCode,
     phone: user.phone,
     profilePicture: user.profilePicture,
     role: user.role,
     status: user.status,
     isEmailVerified: user.isEmailVerified,
+    mustChangePassword: user.mustChangePassword,
     createdAt: user.createdAt,
   };
 }

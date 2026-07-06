@@ -6,11 +6,21 @@ const { sendEmail } = require("../config/email");
 const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { publicUser } = require("../utils/publicUser");
-const { signToken } = require("../middleware/auth");
+const { requireAuth, signToken } = require("../middleware/auth");
 
 const router = express.Router();
 const PASSWORD_HASH_ROUNDS = Number(process.env.PASSWORD_HASH_ROUNDS || 10);
 const OTP_HASH_ROUNDS = Number(process.env.OTP_HASH_ROUNDS || 8);
+const COUNTRIES = [
+  { name: "United States", code: "US", dialCode: "+1" },
+  { name: "Canada", code: "CA", dialCode: "+1" },
+  { name: "United Kingdom", code: "GB", dialCode: "+44" },
+  { name: "Australia", code: "AU", dialCode: "+61" },
+  { name: "Bangladesh", code: "BD", dialCode: "+880" },
+  { name: "India", code: "IN", dialCode: "+91" },
+  { name: "Pakistan", code: "PK", dialCode: "+92" },
+  { name: "United Arab Emirates", code: "AE", dialCode: "+971" },
+];
 
 function required(value, message) {
   if (!value) {
@@ -18,6 +28,38 @@ function required(value, message) {
     error.statusCode = 400;
     throw error;
   }
+}
+
+function normalizeSignupContact(body) {
+  const countryCode = String(body.countryCode || "").trim().toUpperCase();
+  const country = COUNTRIES.find((item) => item.code === countryCode);
+  required(countryCode, "Country is required");
+  if (!country) {
+    const error = new Error("Select a valid country");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const phoneCode = String(body.phoneCode || country.dialCode).trim();
+  const phone = String(body.phone || "").trim();
+  required(phone, "Phone number is required");
+  if (phoneCode !== country.dialCode || !phone.startsWith(country.dialCode)) {
+    const error = new Error("Phone number must match the selected country code");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/^\+\d{1,4}[\s().\-\d]{6,24}$/.test(phone)) {
+    const error = new Error("Enter a valid phone number");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return {
+    country: country.name,
+    countryCode: country.code,
+    phoneCode: country.dialCode,
+    phone,
+  };
 }
 
 function otpTiming() {
@@ -52,13 +94,14 @@ async function notifyAccountsOfSignup(user) {
       to: process.env.ACCOUNTS_EMAIL || EMAIL_ADDRESSES.accounts,
       from: EMAIL_SENDERS.accounts,
       subject: `New signup request: ${user.name}`,
-      text: `A new user requested signup.\n\nName: ${user.name}\nEmail: ${user.email}\nCompany: ${user.company || "Not provided"}\nPhone: ${user.phone || "Not provided"}\nStatus: ${user.status}`,
+      text: `A new user requested signup.\n\nName: ${user.name}\nEmail: ${user.email}\nCompany: ${user.company || "Not provided"}\nCountry: ${user.country || "Not provided"}\nPhone: ${user.phone || "Not provided"}\nStatus: ${user.status}`,
       html: `
         <p>A new user requested signup.</p>
         <ul>
           <li><strong>Name:</strong> ${user.name}</li>
           <li><strong>Email:</strong> ${user.email}</li>
           <li><strong>Company:</strong> ${user.company || "Not provided"}</li>
+          <li><strong>Country:</strong> ${user.country || "Not provided"}</li>
           <li><strong>Phone:</strong> ${user.phone || "Not provided"}</li>
           <li><strong>Status:</strong> ${user.status}</li>
         </ul>
@@ -70,10 +113,11 @@ async function notifyAccountsOfSignup(user) {
 }
 
 router.post("/signup", asyncHandler(async (req, res) => {
-  const { name, email, password, company, phone } = req.body;
+  const { name, email, password, company } = req.body;
   required(name, "Name is required");
   required(email, "Email is required");
   required(password, "Password is required");
+  const contact = normalizeSignupContact(req.body);
 
   const exists = await User.findOne({ email: email.toLowerCase() });
   if (exists) {
@@ -83,7 +127,7 @@ router.post("/signup", asyncHandler(async (req, res) => {
   }
 
   const passwordHash = await bcrypt.hash(password, PASSWORD_HASH_ROUNDS);
-  const user = await User.create({ name, email, passwordHash, company, phone, status: "pending", isEmailVerified: false });
+  const user = await User.create({ name, email, passwordHash, company, ...contact, status: "pending", isEmailVerified: false });
   await createAndSendOtp(user.email, "signup");
   notifyAccountsOfSignup(user);
   res.status(201).json({
@@ -112,7 +156,8 @@ router.post("/login", asyncHandler(async (req, res) => {
     error.statusCode = 403;
     throw error;
   }
-  if (!user.isEmailVerified) {
+  const canCompleteEmployeeSetup = user.role === "employee" && user.mustChangePassword && user.status === "active";
+  if (!user.isEmailVerified && !canCompleteEmployeeSetup) {
     const error = new Error("Please verify your email OTP before logging in");
     error.statusCode = 403;
     throw error;
@@ -122,7 +167,58 @@ router.post("/login", asyncHandler(async (req, res) => {
     error.statusCode = 403;
     throw error;
   }
-  res.json({ ok: true, user: publicUser(user), token: signToken(user) });
+  res.json({
+    ok: true,
+    user: publicUser(user),
+    token: signToken(user),
+    requiresEmployeeSetup: canCompleteEmployeeSetup,
+  });
+}));
+
+router.post("/employee/complete-setup", requireAuth, asyncHandler(async (req, res) => {
+  const { otp, password } = req.body;
+  required(otp, "OTP code is required");
+  required(password, "New password is required");
+  if (req.user.role !== "employee") {
+    const error = new Error("Employee setup is only available for employee accounts");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (String(password).length < 8) {
+    const error = new Error("New password must be at least 8 characters");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const record = await Otp.findOne({
+    email: req.user.email.toLowerCase(),
+    purpose: "signup",
+    usedAt: null,
+    expiresAt: { $gt: new Date() },
+  }).sort({ createdAt: -1 });
+
+  const valid = record ? await bcrypt.compare(String(otp), record.codeHash) : false;
+  if (!valid) {
+    const error = new Error("Invalid or expired OTP");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  record.usedAt = new Date();
+  await record.save();
+  const user = await User.findById(req.user._id);
+  user.passwordHash = await bcrypt.hash(password, PASSWORD_HASH_ROUNDS);
+  user.isEmailVerified = true;
+  user.mustChangePassword = false;
+  user.status = "active";
+  await user.save();
+
+  res.json({
+    ok: true,
+    user: publicUser(user),
+    token: signToken(user),
+    message: "Employee account setup completed.",
+  });
 }));
 
 router.post("/otp/send", asyncHandler(async (req, res) => {
