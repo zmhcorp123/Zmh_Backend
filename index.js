@@ -4,6 +4,8 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
+const helmet = require("helmet");
 const { connectDb } = require("./src/config/db");
 const { errorHandler, notFound } = require("./src/middleware/error");
 const authRoutes = require("./src/routes/auth.routes");
@@ -32,6 +34,11 @@ const configuredOrigins = (process.env.FRONTEND_URL || "")
   .filter(Boolean);
 const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
 
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+app.use(compression({ threshold: 1024 }));
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
@@ -61,8 +68,23 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/chatbot", chatbotRoutes);
 
 if (fs.existsSync(frontendIndexPath)) {
-  app.use(express.static(frontendDistPath));
+  app.use(express.static(frontendDistPath, {
+    etag: true,
+    lastModified: true,
+    maxAge: "1h",
+    setHeaders(res, filePath) {
+      const normalizedPath = filePath.split(path.sep).join("/");
+      if (normalizedPath.includes("/assets/") || normalizedPath.includes("/brand/")) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        return;
+      }
+      if (normalizedPath.endsWith(".html")) {
+        res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+      }
+    },
+  }));
   app.get(/^\/(?!api(?:\/|$)).*/, (_req, res) => {
+    res.set("Cache-Control", "public, max-age=0, must-revalidate");
     res.sendFile(frontendIndexPath);
   });
 } else {
