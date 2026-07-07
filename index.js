@@ -20,6 +20,9 @@ const app = express();
 const port = process.env.PORT || 5000;
 const frontendDistPath = process.env.FRONTEND_DIST_PATH || path.join(__dirname, "dist");
 const frontendIndexPath = path.join(frontendDistPath, "index.html");
+const apiRateWindowMs = Number(process.env.API_RATE_WINDOW_MS || 15 * 60 * 1000);
+const apiRateLimit = Number(process.env.API_RATE_LIMIT || 900);
+const rateBuckets = new Map();
 
 const defaultOrigins = [
   "http://localhost:5173",
@@ -33,6 +36,36 @@ const configuredOrigins = (process.env.FRONTEND_URL || "")
   .map((origin) => origin.trim())
   .filter(Boolean);
 const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
+
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+
+function apiRateLimiter(req, res, next) {
+  if (req.method === "OPTIONS" || req.path === "/api/health") return next();
+  const now = Date.now();
+  const key = req.ip || req.socket.remoteAddress || "unknown";
+  const bucket = rateBuckets.get(key) || { count: 0, resetAt: now + apiRateWindowMs };
+  if (bucket.resetAt <= now) {
+    bucket.count = 0;
+    bucket.resetAt = now + apiRateWindowMs;
+  }
+  bucket.count += 1;
+  rateBuckets.set(key, bucket);
+  res.setHeader("RateLimit-Limit", String(apiRateLimit));
+  res.setHeader("RateLimit-Remaining", String(Math.max(0, apiRateLimit - bucket.count)));
+  res.setHeader("RateLimit-Reset", String(Math.ceil(bucket.resetAt / 1000)));
+  if (bucket.count > apiRateLimit) {
+    return res.status(429).json({ ok: false, message: "Too many requests. Please try again soon." });
+  }
+  return next();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateBuckets.entries()) {
+    if (bucket.resetAt <= now) rateBuckets.delete(key);
+  }
+}, Math.min(apiRateWindowMs, 60 * 1000)).unref?.();
 
 app.use(helmet({
   contentSecurityPolicy: false,
@@ -48,6 +81,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 }));
+app.use("/api", apiRateLimiter);
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -76,6 +110,10 @@ if (fs.existsSync(frontendIndexPath)) {
       const normalizedPath = filePath.split(path.sep).join("/");
       if (normalizedPath.includes("/assets/") || normalizedPath.includes("/brand/")) {
         res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        return;
+      }
+      if (/\.(?:css|js|mjs|webp|avif|png|jpg|jpeg|svg|ico|woff2?)$/i.test(normalizedPath)) {
+        res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
         return;
       }
       if (normalizedPath.endsWith(".html")) {
