@@ -3,7 +3,7 @@ const { EMAIL_ADDRESSES } = require("../config/emailConfig");
 
 const userSchema = new mongoose.Schema({
   name: { type: String, trim: true, required: true },
-  email: { type: String, trim: true, lowercase: true, unique: true, required: true },
+  email: { type: String, trim: true, lowercase: true, required: true },
   passwordHash: { type: String, required: true },
   username: { type: String, trim: true, default: "" },
   company: { type: String, trim: true, default: "" },
@@ -18,6 +18,7 @@ const userSchema = new mongoose.Schema({
   mustChangePassword: { type: Boolean, default: false },
 }, { timestamps: true });
 
+userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ status: 1, role: 1, createdAt: -1 });
 
 const otpSchema = new mongoose.Schema({

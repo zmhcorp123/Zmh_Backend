@@ -11,6 +11,7 @@ const { requireAuth, signToken } = require("../middleware/auth");
 const router = express.Router();
 const PASSWORD_HASH_ROUNDS = Number(process.env.PASSWORD_HASH_ROUNDS || 10);
 const OTP_HASH_ROUNDS = Number(process.env.OTP_HASH_ROUNDS || 8);
+const LOGIN_USER_FIELDS = "name email passwordHash username company country countryCode phoneCode phone profilePicture role status isEmailVerified mustChangePassword";
 const COUNTRIES = [
   { name: "United States", code: "US", dialCode: "+1" },
   { name: "Canada", code: "CA", dialCode: "+1" },
@@ -28,6 +29,22 @@ function required(value, message) {
     error.statusCode = 400;
     throw error;
   }
+}
+
+function elapsedMs(start) {
+  return Number(process.hrtime.bigint() - start) / 1e6;
+}
+
+function logLoginTiming(email, timings, status = "ok") {
+  const rounded = Object.fromEntries(Object.entries(timings).map(([key, value]) => [key, Math.round(value)]));
+  console.log("[auth:login]", {
+    email,
+    status,
+    dbQueryMs: rounded.dbQueryMs || 0,
+    passwordVerifyMs: rounded.passwordVerifyMs || 0,
+    jwtMs: rounded.jwtMs || 0,
+    totalMs: rounded.totalMs || 0,
+  });
 }
 
 function normalizeSignupContact(body) {
@@ -140,39 +157,59 @@ router.post("/signup", asyncHandler(async (req, res) => {
 }));
 
 router.post("/login", asyncHandler(async (req, res) => {
+  const requestStart = process.hrtime.bigint();
+  const timings = {};
   const { email, password } = req.body;
   required(email, "Email is required");
   required(password, "Password is required");
+  const normalizedEmail = String(email).trim().toLowerCase();
 
-  const user = await User.findOne({ email: email.toLowerCase() });
-  const valid = user ? await bcrypt.compare(password, user.passwordHash) : false;
-  if (!valid) {
-    const error = new Error("Invalid email or password");
-    error.statusCode = 401;
+  try {
+    const queryStart = process.hrtime.bigint();
+    const user = await User.findOne({ email: normalizedEmail }).select(LOGIN_USER_FIELDS);
+    timings.dbQueryMs = elapsedMs(queryStart);
+
+    const passwordStart = process.hrtime.bigint();
+    const valid = user ? await bcrypt.compare(password, user.passwordHash) : false;
+    timings.passwordVerifyMs = elapsedMs(passwordStart);
+    if (!valid) {
+      const error = new Error("Invalid email or password");
+      error.statusCode = 401;
+      throw error;
+    }
+    if (user.status === "suspended") {
+      const error = new Error("Account is suspended");
+      error.statusCode = 403;
+      throw error;
+    }
+    const canCompleteEmployeeSetup = user.role === "employee" && user.mustChangePassword && user.status === "active";
+    if (!user.isEmailVerified && !canCompleteEmployeeSetup) {
+      const error = new Error("Please verify your email OTP before logging in");
+      error.statusCode = 403;
+      throw error;
+    }
+    if (user.status !== "active") {
+      const error = new Error("Your account is pending admin approval");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const jwtStart = process.hrtime.bigint();
+    const token = signToken(user);
+    timings.jwtMs = elapsedMs(jwtStart);
+    timings.totalMs = elapsedMs(requestStart);
+    logLoginTiming(normalizedEmail, timings);
+    res.json({
+      ok: true,
+      user: publicUser(user),
+      token,
+      requiresEmployeeSetup: canCompleteEmployeeSetup,
+    });
+  } catch (error) {
+    timings.totalMs = elapsedMs(requestStart);
+    logLoginTiming(normalizedEmail, timings, error.statusCode || "error");
     throw error;
   }
-  if (user.status === "suspended") {
-    const error = new Error("Account is suspended");
-    error.statusCode = 403;
-    throw error;
-  }
-  const canCompleteEmployeeSetup = user.role === "employee" && user.mustChangePassword && user.status === "active";
-  if (!user.isEmailVerified && !canCompleteEmployeeSetup) {
-    const error = new Error("Please verify your email OTP before logging in");
-    error.statusCode = 403;
-    throw error;
-  }
-  if (user.status !== "active") {
-    const error = new Error("Your account is pending admin approval");
-    error.statusCode = 403;
-    throw error;
-  }
-  res.json({
-    ok: true,
-    user: publicUser(user),
-    token: signToken(user),
-    requiresEmployeeSetup: canCompleteEmployeeSetup,
-  });
 }));
 
 router.post("/employee/complete-setup", requireAuth, asyncHandler(async (req, res) => {

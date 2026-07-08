@@ -2,6 +2,9 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const { User } = require("../models");
 
+let connectionPromise = null;
+let listenersRegistered = false;
+
 async function seedAdmin() {
   const email = process.env.ADMIN_SEED_EMAIL;
   const password = process.env.ADMIN_SEED_PASSWORD;
@@ -24,24 +27,37 @@ async function seedAdmin() {
 }
 
 async function connectDb() {
+  if (mongoose.connection.readyState === 1) return mongoose.connection;
+  if (connectionPromise) return connectionPromise;
+
   const uri = process.env.MONGODB_URI;
   if (!uri) {
     throw new Error("MONGODB_URI is required");
   }
 
-  mongoose.connection.on("connected", () => {
-    global.mongooseReadyState = "connected";
-  });
-  mongoose.connection.on("disconnected", () => {
-    global.mongooseReadyState = "disconnected";
-  });
+  if (!listenersRegistered) {
+    listenersRegistered = true;
+    mongoose.connection.on("connected", () => {
+      global.mongooseReadyState = "connected";
+    });
+    mongoose.connection.on("disconnected", () => {
+      global.mongooseReadyState = "disconnected";
+    });
+  }
 
-  await mongoose.connect(uri, {
+  connectionPromise = mongoose.connect(uri, {
     maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 10),
     serverSelectionTimeoutMS: Number(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || 10000),
+  }).then(async () => {
+    await User.syncIndexes();
+    await seedAdmin();
+    return mongoose.connection;
+  }).catch((error) => {
+    connectionPromise = null;
+    throw error;
   });
-  await seedAdmin();
-  return mongoose.connection;
+
+  return connectionPromise;
 }
 
 module.exports = { connectDb };
