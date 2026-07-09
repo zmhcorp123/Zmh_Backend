@@ -5,7 +5,6 @@ const test = require("node:test");
 const { spawnSync } = require("node:child_process");
 const { validateEmail, isValidEmail } = require("../src/utils/validateEmail");
 const authRoutes = require("../src/routes/auth.routes");
-const { errorHandler } = require("../src/middleware/error");
 
 test("validateEmail normalizes valid email addresses", () => {
   assert.equal(validateEmail("  USER@Example.COM  "), "user@example.com");
@@ -25,25 +24,6 @@ test("JWT_SECRET is required at startup", () => {
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr + result.stdout, /JWT_SECRET is required/);
-});
-
-test("CSRF errors return a proper forbidden JSON response", () => {
-  const response = {
-    statusCode: 200,
-    body: null,
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    json(body) {
-      this.body = body;
-      return this;
-    },
-  };
-
-  errorHandler({ code: "EBADCSRFTOKEN" }, {}, response, () => {});
-  assert.equal(response.statusCode, 403);
-  assert.deepEqual(response.body, { ok: false, message: "Invalid or missing CSRF token." });
 });
 
 test("concurrent OTP resend updates one record and rejects the racing request", async () => {

@@ -6,9 +6,6 @@ const express = require("express");
 const cors = require("cors");
 const compression = require("compression");
 const helmet = require("helmet");
-const cookieParser = require("cookie-parser");
-const csrf = require("csurf");
-const { JWT_SECRET } = require("./src/config/env");
 const { connectDb } = require("./src/config/db");
 const { errorHandler, notFound } = require("./src/middleware/error");
 const authRoutes = require("./src/routes/auth.routes");
@@ -21,7 +18,6 @@ const settingsRoutes = require("./src/routes/settings.routes");
 
 const app = express();
 const port = process.env.PORT || 5000;
-const isProduction = process.env.NODE_ENV === "production";
 const frontendDistPath = process.env.FRONTEND_DIST_PATH || path.join(__dirname, "dist");
 const frontendIndexPath = path.join(frontendDistPath, "index.html");
 const apiRateWindowMs = Number(process.env.API_RATE_WINDOW_MS || 15 * 60 * 1000);
@@ -82,23 +78,11 @@ app.use(cors({
     return callback(new Error("Origin is not allowed by CORS"));
   },
   methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token", "CSRF-Token"],
-  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
 app.use("/api", apiRateLimiter);
-app.use(cookieParser(process.env.COOKIE_SECRET || JWT_SECRET));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
-
-const csrfProtection = csrf({
-  cookie: {
-    key: "_zmh_csrf",
-    httpOnly: true,
-    sameSite: isProduction ? "strict" : "lax",
-    secure: isProduction,
-    signed: true,
-  },
-});
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -106,11 +90,6 @@ app.get("/api/health", (_req, res) => {
     database: global.mongooseReadyState || "unknown",
     timestamp: new Date().toISOString(),
   });
-});
-
-app.use("/api", csrfProtection);
-app.get("/api/csrf-token", (req, res) => {
-  res.json({ ok: true, csrfToken: req.csrfToken() });
 });
 
 app.use("/api/auth", authRoutes);
