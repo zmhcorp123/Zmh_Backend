@@ -7,6 +7,7 @@ const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { publicUser } = require("../utils/publicUser");
 const { requireAuth, signToken } = require("../middleware/auth");
+const { validateEmail } = require("../utils/validateEmail");
 
 const router = express.Router();
 const PASSWORD_HASH_ROUNDS = Number(process.env.PASSWORD_HASH_ROUNDS || 10);
@@ -93,10 +94,62 @@ async function createAndSendOtp(email, purpose = "signup") {
   const code = crypto.randomInt(100000, 999999).toString();
   const codeHash = await bcrypt.hash(code, OTP_HASH_ROUNDS);
   const timing = otpTiming();
-  await Otp.create({ email, codeHash, purpose, ...timing });
+  await Otp.findOneAndUpdate(
+    { email, purpose },
+    { codeHash, purpose, usedAt: null, ...timing },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
   sendEmail({
     to: email,
     from: EMAIL_SENDERS.notifications,
+    subject: "Your ZMH verification code",
+    text: `Your ZMH verification code is ${code}. It expires in ${timing.expiryMinutes} minutes.`,
+    html: `<p>Your ZMH verification code is <strong>${code}</strong>.</p><p>It expires in ${timing.expiryMinutes} minutes.</p>`,
+  }).catch((error) => {
+    console.error("[otp email failed]", error.message);
+  });
+}
+
+async function resendOtp(email, purpose = "signup", deps = {}) {
+  const otpModel = deps.Otp || Otp;
+  const bcryptLib = deps.bcrypt || bcrypt;
+  const cryptoLib = deps.crypto || crypto;
+  const sendEmailFn = deps.sendEmail || sendEmail;
+  const emailSenders = deps.EMAIL_SENDERS || EMAIL_SENDERS;
+  const code = cryptoLib.randomInt(100000, 999999).toString();
+  const codeHash = await bcryptLib.hash(code, OTP_HASH_ROUNDS);
+  const timing = otpTiming();
+  const now = new Date();
+  const record = await otpModel.findOneAndUpdate(
+    {
+      email,
+      purpose,
+      $or: [
+        { resendAvailableAt: { $lte: now } },
+        { resendAvailableAt: { $exists: false } },
+      ],
+    },
+    { codeHash, purpose, usedAt: null, ...timing },
+    { new: true, sort: { createdAt: -1 } }
+  );
+
+  if (!record) {
+    const latest = await otpModel.findOne({ email, purpose }).sort({ createdAt: -1 });
+    if (latest) {
+      const error = new Error("Please wait before requesting another OTP");
+      error.statusCode = 429;
+      throw error;
+    }
+    await otpModel.findOneAndUpdate(
+      { email, purpose },
+      { codeHash, purpose, usedAt: null, ...timing },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  sendEmailFn({
+    to: email,
+    from: emailSenders.notifications,
     subject: "Your ZMH verification code",
     text: `Your ZMH verification code is ${code}. It expires in ${timing.expiryMinutes} minutes.`,
     html: `<p>Your ZMH verification code is <strong>${code}</strong>.</p><p>It expires in ${timing.expiryMinutes} minutes.</p>`,
@@ -134,9 +187,10 @@ router.post("/signup", asyncHandler(async (req, res) => {
   required(name, "Name is required");
   required(email, "Email is required");
   required(password, "Password is required");
+  const normalizedEmail = validateEmail(email);
   const contact = normalizeSignupContact(req.body);
 
-  const exists = await User.findOne({ email: email.toLowerCase() });
+  const exists = await User.findOne({ email: normalizedEmail });
   if (exists) {
     const error = new Error("Email is already registered");
     error.statusCode = 409;
@@ -144,7 +198,7 @@ router.post("/signup", asyncHandler(async (req, res) => {
   }
 
   const passwordHash = await bcrypt.hash(password, PASSWORD_HASH_ROUNDS);
-  const user = await User.create({ name, email, passwordHash, company, ...contact, status: "pending", isEmailVerified: false });
+  const user = await User.create({ name, email: normalizedEmail, passwordHash, company, ...contact, status: "pending", isEmailVerified: false });
   await createAndSendOtp(user.email, "signup");
   notifyAccountsOfSignup(user);
   res.status(201).json({
@@ -162,7 +216,7 @@ router.post("/login", asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   required(email, "Email is required");
   required(password, "Password is required");
-  const normalizedEmail = String(email).trim().toLowerCase();
+  const normalizedEmail = validateEmail(email);
 
   try {
     const queryStart = process.hrtime.bigint();
@@ -261,22 +315,16 @@ router.post("/employee/complete-setup", requireAuth, asyncHandler(async (req, re
 router.post("/otp/send", asyncHandler(async (req, res) => {
   const { email, purpose = "signup" } = req.body;
   required(email, "Email is required");
-  await createAndSendOtp(email.toLowerCase(), purpose);
+  const normalizedEmail = validateEmail(email);
+  await createAndSendOtp(normalizedEmail, purpose);
   res.json({ ok: true, message: "OTP sent." });
 }));
 
 router.post("/otp/resend", asyncHandler(async (req, res) => {
   const { email, purpose = "signup" } = req.body;
   required(email, "Email is required");
-
-  const latest = await Otp.findOne({ email: email.toLowerCase(), purpose }).sort({ createdAt: -1 });
-  if (latest && latest.resendAvailableAt > new Date()) {
-    const error = new Error("Please wait before requesting another OTP");
-    error.statusCode = 429;
-    throw error;
-  }
-
-  await createAndSendOtp(email.toLowerCase(), purpose);
+  const normalizedEmail = validateEmail(email);
+  await resendOtp(normalizedEmail, purpose);
   res.json({ ok: true, message: "OTP resent." });
 }));
 
@@ -284,9 +332,10 @@ router.post("/otp/verify", asyncHandler(async (req, res) => {
   const { email, otp, purpose = "signup" } = req.body;
   required(email, "Email is required");
   required(otp, "OTP code is required");
+  const normalizedEmail = validateEmail(email);
 
   const record = await Otp.findOne({
-    email: email.toLowerCase(),
+    email: normalizedEmail,
     purpose,
     usedAt: null,
     expiresAt: { $gt: new Date() },
@@ -302,7 +351,7 @@ router.post("/otp/verify", asyncHandler(async (req, res) => {
   record.usedAt = new Date();
   await record.save();
   const user = await User.findOneAndUpdate(
-    { email: email.toLowerCase() },
+    { email: normalizedEmail },
     { isEmailVerified: true },
     { new: true }
   );
@@ -318,7 +367,8 @@ router.post("/otp/verify", asyncHandler(async (req, res) => {
 router.post("/forgot-password", asyncHandler(async (req, res) => {
   const { email } = req.body;
   required(email, "Email is required");
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const normalizedEmail = validateEmail(email);
+  const user = await User.findOne({ email: normalizedEmail });
   if (user) await createAndSendOtp(user.email, "reset");
   res.json({ ok: true, message: "If that email exists, password reset instructions were sent." });
 }));
@@ -328,9 +378,10 @@ router.post("/reset-password", asyncHandler(async (req, res) => {
   required(email, "Email is required");
   required(otp, "OTP code is required");
   required(password, "New password is required");
+  const normalizedEmail = validateEmail(email);
 
   const record = await Otp.findOne({
-    email: email.toLowerCase(),
+    email: normalizedEmail,
     purpose: "reset",
     usedAt: null,
     expiresAt: { $gt: new Date() },
@@ -344,10 +395,12 @@ router.post("/reset-password", asyncHandler(async (req, res) => {
   }
 
   const passwordHash = await bcrypt.hash(password, PASSWORD_HASH_ROUNDS);
-  await User.findOneAndUpdate({ email: email.toLowerCase() }, { passwordHash });
+  await User.findOneAndUpdate({ email: normalizedEmail }, { passwordHash });
   record.usedAt = new Date();
   await record.save();
   res.json({ ok: true, message: "Password updated." });
 }));
+
+router._test = { createAndSendOtp, resendOtp };
 
 module.exports = router;

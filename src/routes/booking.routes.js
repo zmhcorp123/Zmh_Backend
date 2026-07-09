@@ -4,6 +4,8 @@ const { sendEmail } = require("../config/email");
 const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { requireAuth } = require("../middleware/auth");
+const { JWT_SECRET } = require("../config/env");
+const { validateEmail } = require("../utils/validateEmail");
 const jwt = require("jsonwebtoken");
 
 const router = express.Router();
@@ -91,7 +93,7 @@ async function attachUserIfPresent(req, _res, next) {
     const header = req.headers.authorization || "";
     const token = header.startsWith("Bearer ") ? header.slice(7) : null;
     if (token) {
-      const payload = jwt.verify(token, process.env.JWT_SECRET || "dev-secret-change-me");
+      const payload = jwt.verify(token, JWT_SECRET);
       req.user = await User.findById(payload.id).select("-passwordHash");
     }
     next();
@@ -116,6 +118,7 @@ router.post("/", attachUserIfPresent, asyncHandler(async (req, res) => {
   validateOption(payload.hours, HOUR_OPTIONS, "Select valid opening hours");
   validateOption(payload.afterHours, AFTER_HOURS_OPTIONS, "Select valid after-hours needs");
   if (req.user?.email && !payload.email) payload.email = req.user.email;
+  if (payload.email) payload.email = validateEmail(payload.email);
   if (req.user?._id) payload.user = req.user._id;
   const booking = await Booking.create(payload);
   notifySalesOfBooking(booking, req.user).catch((error) => {

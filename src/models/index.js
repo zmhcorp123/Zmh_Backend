@@ -30,6 +30,8 @@ const otpSchema = new mongoose.Schema({
   resendAvailableAt: { type: Date, required: true },
 }, { timestamps: true });
 
+otpSchema.index({ email: 1, purpose: 1, createdAt: -1 });
+
 const bookingSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   companyName: { type: String, trim: true, required: true },

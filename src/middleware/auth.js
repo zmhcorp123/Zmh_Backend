@@ -1,10 +1,11 @@
 const jwt = require("jsonwebtoken");
 const { User } = require("../models");
+const { JWT_SECRET } = require("../config/env");
 
 function signToken(user) {
   return jwt.sign(
     { id: user._id.toString(), role: user.role },
-    process.env.JWT_SECRET || "dev-secret-change-me",
+    JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
   );
 }
@@ -19,7 +20,7 @@ async function requireAuth(req, _res, next) {
       throw error;
     }
 
-    const payload = jwt.verify(token, process.env.JWT_SECRET || "dev-secret-change-me");
+    const payload = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(payload.id).select("-passwordHash");
     if (!user) {
       const error = new Error("User not found");

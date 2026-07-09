@@ -3,6 +3,7 @@ const { Contact } = require("../models");
 const { sendEmail } = require("../config/email");
 const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
+const { validateEmail } = require("../utils/validateEmail");
 
 const router = express.Router();
 
@@ -30,16 +31,17 @@ router.post("/", asyncHandler(async (req, res) => {
     error.statusCode = 400;
     throw error;
   }
+  const normalizedEmail = validateEmail(email);
 
-  const contact = await Contact.create({ name, company, email, phone, message });
+  const contact = await Contact.create({ name, company, email: normalizedEmail, phone, message });
   res.status(201).json({ ok: true, contact, message: "Inquiry received." });
 
   sendEmail({
     to: inquiryRecipients(),
     from: EMAIL_SENDERS.sales,
     subject: `New ZMH inquiry from ${name}`,
-    text: `${name} (${email}) from ${company || "No company"} wrote: ${message}`,
-    html: `<p><strong>${escapeHtml(name)}</strong> (${escapeHtml(email)}) from ${escapeHtml(company || "No company")} wrote:</p><p>${escapeHtml(message)}</p><p>Phone: ${escapeHtml(phone || "Not provided")}</p>`,
+    text: `${name} (${normalizedEmail}) from ${company || "No company"} wrote: ${message}`,
+    html: `<p><strong>${escapeHtml(name)}</strong> (${escapeHtml(normalizedEmail)}) from ${escapeHtml(company || "No company")} wrote:</p><p>${escapeHtml(message)}</p><p>Phone: ${escapeHtml(phone || "Not provided")}</p>`,
   }).catch((error) => {
     console.error("[contact email failed]", error.message);
   });

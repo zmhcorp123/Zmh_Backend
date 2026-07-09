@@ -6,6 +6,7 @@ const { sendEmail } = require("../config/email");
 const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 const { asyncHandler } = require("../utils/asyncHandler");
+const { validateEmail } = require("../utils/validateEmail");
 
 const router = express.Router();
 
@@ -857,17 +858,13 @@ router.post("/orders/:id/progress", employeeOrAdmin, asyncHandler(async (req, re
     error.statusCode = 400;
     throw error;
   }
-  if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
-    const error = new Error("Enter a valid customer email");
-    error.statusCode = 400;
-    throw error;
-  }
+  const normalizedCustomerEmail = customerEmail ? validateEmail(customerEmail, "Enter a valid customer email") : "";
   const progress = await OrderProgress.create({
     order: order._id,
     title,
     description,
     customerName,
-    customerEmail,
+    customerEmail: normalizedCustomerEmail,
     customerPhone,
     customerAddress,
     happenedAt: parseDate(req.body.happenedAt) || new Date(),
@@ -901,13 +898,14 @@ router.get("/users", asyncHandler(async (_req, res) => {
 
 router.post("/users/employee", asyncHandler(async (req, res) => {
   const name = cleanString(req.body.name);
-  const email = cleanString(req.body.email).toLowerCase();
+  const emailInput = cleanString(req.body.email);
   const temporaryPassword = cleanString(req.body.temporaryPassword);
-  if (!name || !email || !temporaryPassword) {
+  if (!name || !emailInput || !temporaryPassword) {
     const error = new Error("Name, email, and temporary password are required");
     error.statusCode = 400;
     throw error;
   }
+  const email = validateEmail(emailInput);
   if (temporaryPassword.length < 8) {
     const error = new Error("Temporary password must be at least 8 characters");
     error.statusCode = 400;

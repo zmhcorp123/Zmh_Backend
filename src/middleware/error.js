@@ -5,6 +5,13 @@ function notFound(req, res, next) {
 }
 
 function errorHandler(error, _req, res, _next) {
+  if (error.code === "EBADCSRFTOKEN") {
+    return res.status(403).json({
+      ok: false,
+      message: "Invalid or missing CSRF token.",
+    });
+  }
+
   const statusCode = error.statusCode || 500;
   res.status(statusCode).json({
     ok: false,
