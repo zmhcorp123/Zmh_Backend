@@ -33,19 +33,17 @@ function required(value, message) {
 }
 
 function elapsedMs(start) {
-  return Number(process.hrtime.bigint() - start) / 1e6;
+  return Math.round(Number(process.hrtime.bigint() - start) / 1e6);
 }
 
-function logLoginTiming(email, timings, status = "ok") {
-  const rounded = Object.fromEntries(Object.entries(timings).map(([key, value]) => [key, Math.round(value)]));
-  console.log("[auth:login]", {
-    email,
-    status,
-    dbQueryMs: rounded.dbQueryMs || 0,
-    passwordVerifyMs: rounded.passwordVerifyMs || 0,
-    jwtMs: rounded.jwtMs || 0,
-    totalMs: rounded.totalMs || 0,
-  });
+function maskEmail(email = "") {
+  const [name, domain] = String(email).split("@");
+  if (!domain) return "unknown";
+  return `${name.slice(0, 2)}***@${domain}`;
+}
+
+function logLoginStep(requestId, step, details = {}) {
+  console.log("[auth:login]", { requestId, step, ...details });
 }
 
 function normalizeSignupContact(body) {
@@ -212,20 +210,34 @@ router.post("/signup", asyncHandler(async (req, res) => {
 
 router.post("/login", asyncHandler(async (req, res) => {
   const requestStart = process.hrtime.bigint();
+  const requestId = crypto.randomUUID();
   const timings = {};
   const { email, password } = req.body;
   required(email, "Email is required");
   required(password, "Password is required");
   const normalizedEmail = validateEmail(email);
+  const safeEmail = maskEmail(normalizedEmail);
+
+  logLoginStep(requestId, "request received", { email: safeEmail });
+  res.once("finish", () => {
+    logLoginStep(requestId, "response sent", {
+      email: safeEmail,
+      statusCode: res.statusCode,
+      totalMs: elapsedMs(requestStart),
+      ...timings,
+    });
+  });
 
   try {
     const queryStart = process.hrtime.bigint();
-    const user = await User.findOne({ email: normalizedEmail }).select(LOGIN_USER_FIELDS);
+    const user = await User.findOne({ email: normalizedEmail }).select(LOGIN_USER_FIELDS).lean();
     timings.dbQueryMs = elapsedMs(queryStart);
+    logLoginStep(requestId, "database query", { email: safeEmail, durationMs: timings.dbQueryMs, userFound: Boolean(user) });
 
     const passwordStart = process.hrtime.bigint();
     const valid = user ? await bcrypt.compare(password, user.passwordHash) : false;
     timings.passwordVerifyMs = elapsedMs(passwordStart);
+    logLoginStep(requestId, "password comparison", { email: safeEmail, durationMs: timings.passwordVerifyMs });
     if (!valid) {
       const error = new Error("Invalid email or password");
       error.statusCode = 401;
@@ -251,8 +263,7 @@ router.post("/login", asyncHandler(async (req, res) => {
     const jwtStart = process.hrtime.bigint();
     const token = signToken(user);
     timings.jwtMs = elapsedMs(jwtStart);
-    timings.totalMs = elapsedMs(requestStart);
-    logLoginTiming(normalizedEmail, timings);
+    logLoginStep(requestId, "jwt generation", { email: safeEmail, durationMs: timings.jwtMs });
     res.json({
       ok: true,
       user: publicUser(user),
@@ -260,8 +271,7 @@ router.post("/login", asyncHandler(async (req, res) => {
       requiresEmployeeSetup: canCompleteEmployeeSetup,
     });
   } catch (error) {
-    timings.totalMs = elapsedMs(requestStart);
-    logLoginTiming(normalizedEmail, timings, error.statusCode || "error");
+    logLoginStep(requestId, "failed", { email: safeEmail, status: error.statusCode || "error", totalMs: elapsedMs(requestStart), ...timings });
     throw error;
   }
 }));

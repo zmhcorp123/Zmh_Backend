@@ -4,6 +4,11 @@ const { User } = require("../models");
 
 let connectionPromise = null;
 let listenersRegistered = false;
+let maintenanceStarted = false;
+
+function elapsedMs(start) {
+  return Math.round(Number(process.hrtime.bigint() - start) / 1e6);
+}
 
 async function seedAdmin() {
   const email = process.env.ADMIN_SEED_EMAIL;
@@ -45,19 +50,45 @@ async function connectDb() {
     });
   }
 
+  const connectStart = process.hrtime.bigint();
+  console.log("[startup:db] connecting to MongoDB");
+
   connectionPromise = mongoose.connect(uri, {
     maxPoolSize: Number(process.env.MONGODB_MAX_POOL_SIZE || 10),
     serverSelectionTimeoutMS: Number(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || 10000),
+    autoIndex: process.env.MONGODB_AUTO_INDEX === "true",
   }).then(async () => {
-    await User.syncIndexes();
-    await seedAdmin();
+    console.log("[startup:db] MongoDB connected", { durationMs: elapsedMs(connectStart) });
+    runPostConnectMaintenance();
     return mongoose.connection;
   }).catch((error) => {
     connectionPromise = null;
+    console.error("[startup:db] connection failed", { durationMs: elapsedMs(connectStart), message: error.message });
     throw error;
   });
 
   return connectionPromise;
+}
+
+function runPostConnectMaintenance() {
+  if (maintenanceStarted) return;
+  maintenanceStarted = true;
+
+  setImmediate(async () => {
+    const maintenanceStart = process.hrtime.bigint();
+    try {
+      if (process.env.MONGODB_SYNC_INDEXES === "true") {
+        const indexStart = process.hrtime.bigint();
+        await User.syncIndexes();
+        console.log("[startup:db] user indexes synced", { durationMs: elapsedMs(indexStart) });
+      }
+
+      await seedAdmin();
+      console.log("[startup:db] maintenance complete", { durationMs: elapsedMs(maintenanceStart) });
+    } catch (error) {
+      console.error("[startup:db] maintenance failed", { durationMs: elapsedMs(maintenanceStart), message: error.message });
+    }
+  });
 }
 
 module.exports = { connectDb };

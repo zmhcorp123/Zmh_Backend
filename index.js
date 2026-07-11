@@ -18,6 +18,8 @@ const settingsRoutes = require("./src/routes/settings.routes");
 
 const app = express();
 const port = process.env.PORT || 5000;
+const startupStart = process.hrtime.bigint();
+const startedAt = new Date();
 const frontendDistPath = process.env.FRONTEND_DIST_PATH || path.join(__dirname, "dist");
 const frontendIndexPath = path.join(frontendDistPath, "index.html");
 const apiRateWindowMs = Number(process.env.API_RATE_WINDOW_MS || 15 * 60 * 1000);
@@ -36,6 +38,10 @@ const configuredOrigins = (process.env.FRONTEND_URL || "")
   .map((origin) => origin.trim())
   .filter(Boolean);
 const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
+
+function elapsedMs(start) {
+  return Math.round(Number(process.hrtime.bigint() - start) / 1e6);
+}
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
@@ -84,10 +90,23 @@ app.use("/api", apiRateLimiter);
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+app.get("/health", (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    status: "healthy",
+    service: "ZMH Backend",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development",
+  });
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     database: global.mongooseReadyState || "unknown",
+    uptimeMs: Math.round(process.uptime() * 1000),
+    startedAt: startedAt.toISOString(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -136,6 +155,10 @@ app.use(errorHandler);
 
 connectDb().then(() => {
   app.listen(port, () => {
-    console.log(`ZMH backend running on port ${port}`);
+    console.log("[startup] Server started", { port, totalMs: elapsedMs(startupStart) });
+    console.log("[startup] Health endpoint available", { path: "/health" });
   });
+}).catch((error) => {
+  console.error("[startup] failed", { totalMs: elapsedMs(startupStart), message: error.message });
+  process.exit(1);
 });
