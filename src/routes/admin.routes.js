@@ -13,7 +13,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 const ADMIN_LIST_LIMIT = 100;
-const EMPLOYEE_PROGRESS_STATUSES = ["planned", "in progress", "completed", "blocked"];
+const EMPLOYEE_PROGRESS_STATUSES = ["inquiry", "planned", "in progress", "completed", "blocked"];
 
 function employeeOrAdmin(req, _res, next) {
   if (req.user?.role === "admin") return next();
@@ -853,6 +853,8 @@ router.post("/orders/:id/progress", employeeOrAdmin, asyncHandler(async (req, re
   const customerEmail = cleanString(req.body.customerEmail);
   const customerPhone = cleanString(req.body.customerPhone);
   const customerAddress = cleanString(req.body.customerAddress);
+  const status = EMPLOYEE_PROGRESS_STATUSES.includes(req.body.status) ? req.body.status : "completed";
+  const callLog = status === "inquiry" ? cleanString(req.body.callLog) : "";
   if (!title || !customerName || !description) {
     const error = new Error("Title, customer name, and description are required");
     error.statusCode = 400;
@@ -872,7 +874,8 @@ router.post("/orders/:id/progress", employeeOrAdmin, asyncHandler(async (req, re
     admin: req.user._id,
     attachments: Array.isArray(req.body.attachments) ? req.body.attachments : [],
     progressPercent,
-    status: EMPLOYEE_PROGRESS_STATUSES.includes(req.body.status) ? req.body.status : "completed",
+    status,
+    callLog,
   });
   order.progressPercent = Math.max(order.progressPercent || 0, progressPercent);
   await order.save();
@@ -1175,7 +1178,8 @@ router.post("/orders/:id/progress", asyncHandler(async (req, res) => {
     admin: req.user._id,
     attachments: Array.isArray(req.body.attachments) ? req.body.attachments : [],
     progressPercent,
-    status: ["planned", "in progress", "completed", "blocked"].includes(req.body.status) ? req.body.status : "completed",
+    status: ["inquiry", "planned", "in progress", "completed", "blocked"].includes(req.body.status) ? req.body.status : "completed",
+    callLog: req.body.status === "inquiry" ? cleanString(req.body.callLog) : "",
   });
   order.progressPercent = Math.max(order.progressPercent || 0, progressPercent);
   await order.save();

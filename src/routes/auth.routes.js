@@ -48,9 +48,11 @@ function logLoginStep(requestId, step, details = {}) {
 
 function normalizeSignupContact(body) {
   const countryCode = String(body.countryCode || "").trim().toUpperCase();
-  const country = COUNTRIES.find((item) => item.code === countryCode);
+  const country = COUNTRIES.find((item) => item.code === countryCode) || {
+    name: String(body.country || "").trim(), code: countryCode, dialCode: String(body.phoneCode || "").trim(),
+  };
   required(countryCode, "Country is required");
-  if (!country) {
+  if (!country.name || !/^\+[1-9]\d{0,3}$/.test(country.dialCode)) {
     const error = new Error("Select a valid country");
     error.statusCode = 400;
     throw error;

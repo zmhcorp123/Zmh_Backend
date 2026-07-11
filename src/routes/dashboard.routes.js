@@ -235,7 +235,7 @@ router.get("/dashboard/summary", requireAuth, asyncHandler(async (req, res) => {
   const orderIds = bookings.map((booking) => booking._id);
   const progress = orderIds.length
     ? await OrderProgress.find({ order: { $in: orderIds } })
-      .select("order title description status progressPercent happenedAt")
+      .select("order title description status progressPercent callLog customerName customerEmail customerPhone customerAddress happenedAt")
       .sort({ happenedAt: -1 })
       .lean()
     : [];

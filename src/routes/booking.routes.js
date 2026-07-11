@@ -9,12 +9,18 @@ const { validateEmail } = require("../utils/validateEmail");
 const jwt = require("jsonwebtoken");
 
 const router = express.Router();
-const OPERATING_DAY_OPTIONS = ["Monday-Friday", "Monday-Saturday", "Weekends only", "Every day"];
-const HOUR_OPTIONS = ["8 AM-5 PM", "9 AM-6 PM", "10 AM-7 PM", "24/7 coverage"];
 const AFTER_HOURS_OPTIONS = ["No after-hours", "Evening calls", "Weekend coverage", "Emergency calls", "Overflow support"];
 
 function validateOption(value, options, message) {
   if (!options.includes(value)) {
+    const error = new Error(message);
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+function validateRequiredText(value, message) {
+  if (!value || typeof value !== "string" || value.trim().length < 2 || value.trim().length > 120) {
     const error = new Error(message);
     error.statusCode = 400;
     throw error;
@@ -104,6 +110,11 @@ async function attachUserIfPresent(req, _res, next) {
 
 router.post("/", attachUserIfPresent, asyncHandler(async (req, res) => {
   const payload = normalizeBooking(req.body);
+  if (req.user) {
+    payload.companyName = req.user.company || req.user.name;
+    payload.email = req.user.email;
+    payload.phone = req.user.phone || "";
+  }
   if (!payload.companyName) {
     const error = new Error("Company name is required");
     error.statusCode = 400;
@@ -114,10 +125,9 @@ router.post("/", attachUserIfPresent, asyncHandler(async (req, res) => {
     error.statusCode = 400;
     throw error;
   }
-  validateOption(payload.operatingDays, OPERATING_DAY_OPTIONS, "Select valid operating days");
-  validateOption(payload.hours, HOUR_OPTIONS, "Select valid opening hours");
+  validateRequiredText(payload.operatingDays, "Select operating days");
+  validateRequiredText(payload.hours, "Select office hours");
   validateOption(payload.afterHours, AFTER_HOURS_OPTIONS, "Select valid after-hours needs");
-  if (req.user?.email && !payload.email) payload.email = req.user.email;
   if (payload.email) payload.email = validateEmail(payload.email);
   if (req.user?._id) payload.user = req.user._id;
   const booking = await Booking.create(payload);
