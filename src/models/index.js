@@ -88,6 +88,7 @@ contactSchema.index({ createdAt: -1 });
 
 const invoiceSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  order: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
   invoice: { type: String, trim: true, required: true, unique: true },
   company: { type: String, trim: true, required: true },
   amount: { type: Number, default: 0 },

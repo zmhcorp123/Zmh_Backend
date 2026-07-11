@@ -59,6 +59,16 @@ function parseDate(value) {
   return value ? new Date(value) : null;
 }
 
+function addOneMonth(value) {
+  const date = parseDate(value);
+  if (!date || Number.isNaN(date.getTime())) return null;
+  const originalDay = date.getDate();
+  const next = new Date(date.getFullYear(), date.getMonth() + 1, 1);
+  const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  next.setDate(Math.min(originalDay, lastDay));
+  return next;
+}
+
 function normalizeFeatures(features = []) {
   if (typeof features === "string") {
     return features
@@ -155,12 +165,9 @@ function publicPackage(item) {
 }
 
 async function buildOrderSummary(order) {
-  const invoiceFilters = [{ company: order.companyName }];
-  const orderUserId = order.user?._id || order.user;
-  if (orderUserId) invoiceFilters.unshift({ user: orderUserId });
   const [progress, invoices, accountSetting] = await Promise.all([
     OrderProgress.find({ order: order._id }).populate("admin", "name email").sort({ happenedAt: -1 }).lean(),
-    Invoice.find({ $or: invoiceFilters }).sort({ createdAt: -1 }).limit(20).lean(),
+    Invoice.find({ order: order._id }).sort({ createdAt: -1 }).limit(20).lean(),
     Setting.findOne({ key: "accountDetails" }).lean(),
   ]);
   const serviceList = order.activeServices?.length ? order.activeServices : order.services || [];
@@ -231,12 +238,12 @@ function invoiceMeta(order, summary) {
   };
 }
 
-async function ensureOrderInvoice(order, summary) {
+async function createOrderInvoice(order, summary) {
   const meta = invoiceMeta(order, summary);
   const userId = order.user?._id || order.user || null;
-  let invoice = await Invoice.findOne({ invoice: meta.invoiceNumber });
   const invoicePayload = {
     user: userId,
+    order: order._id,
     company: order.companyName,
     amount: Number(meta.total || 0),
     currency: meta.currency || "USD",
@@ -249,44 +256,10 @@ async function ensureOrderInvoice(order, summary) {
     message: `Invoice summary sent for ${order.companyName}.`,
   };
 
-  if (!invoice) {
-    return Invoice.create({ ...invoicePayload, invoice: meta.invoiceNumber });
-  }
-
-  let changed = false;
-  if (!invoice.user && userId) {
-    invoice.user = userId;
-    changed = true;
-  }
-  if (!invoice.company) {
-    invoice.company = invoicePayload.company;
-    changed = true;
-  }
-  if (!invoice.amount) {
-    invoice.amount = invoicePayload.amount;
-    changed = true;
-  }
-  if (!invoice.currency) {
-    invoice.currency = invoicePayload.currency;
-    changed = true;
-  }
-  if (!invoice.dueDate && invoicePayload.dueDate) {
-    invoice.dueDate = invoicePayload.dueDate;
-    changed = true;
-  }
-  if (!invoice.lineItems?.length) {
-    invoice.lineItems = invoicePayload.lineItems;
-    changed = true;
-  }
-  if (!invoice.message) {
-    invoice.message = invoicePayload.message;
-    changed = true;
-  }
-  if (invoice.status === "draft") {
-    invoice.status = invoicePayload.status;
-    changed = true;
-  }
-  return changed ? invoice.save() : invoice;
+  const year = new Date().getFullYear();
+  const suffix = String(order._id).slice(-6).toUpperCase();
+  const uniqueSequence = `${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(-10);
+  return Invoice.create({ ...invoicePayload, invoice: `INV-${year}-${suffix}-${uniqueSequence}` });
 }
 
 function chunkText(text, length = 72) {
@@ -1139,6 +1112,7 @@ router.patch("/orders/:id", asyncHandler(async (req, res) => {
   }
   if (Object.prototype.hasOwnProperty.call(update, "serviceStartDate")) update.serviceStartDate = parseDate(update.serviceStartDate);
   if (Object.prototype.hasOwnProperty.call(update, "nextBillingDate")) update.nextBillingDate = parseDate(update.nextBillingDate);
+  if (update.serviceStartDate && !update.nextBillingDate) update.nextBillingDate = addOneMonth(update.serviceStartDate);
   if (Object.prototype.hasOwnProperty.call(update, "activeServices") && !Array.isArray(update.activeServices)) {
     update.activeServices = String(update.activeServices).split("\n").map((item) => item.trim()).filter(Boolean);
   }
@@ -1150,6 +1124,11 @@ router.patch("/orders/:id", asyncHandler(async (req, res) => {
     const error = new Error("Order not found");
     error.statusCode = 404;
     throw error;
+  }
+  if (update.status === "cancelled") {
+    order.nextBillingDate = null;
+    await order.save();
+    await Invoice.updateMany({ order: order._id, status: { $nin: ["paid", "void"] } }, { $set: { status: "void" } });
   }
   const summary = await buildOrderSummary(order);
   res.json({ ok: true, order, progress: summary.timeline, invoices: summary.billing.invoices, summary });
@@ -1220,6 +1199,11 @@ router.post("/orders/:id/send-invoice-summary", asyncHandler(async (req, res) =>
     error.statusCode = 404;
     throw error;
   }
+  if (order.status === "cancelled") {
+    const error = new Error("Cancelled orders cannot receive new invoices.");
+    error.statusCode = 400;
+    throw error;
+  }
   const to = bookingCustomerEmail(order);
   if (!to) {
     const error = new Error("Order does not have a client email address");
@@ -1238,7 +1222,9 @@ router.post("/orders/:id/send-invoice-summary", asyncHandler(async (req, res) =>
     throw error;
   }
   let summary = await buildOrderSummary(order);
-  const invoice = await ensureOrderInvoice(order, summary);
+  const invoice = await createOrderInvoice(order, summary);
+  order.nextBillingDate = addOneMonth(order.nextBillingDate || order.serviceStartDate || new Date());
+  await order.save();
   summary = await buildOrderSummary(order);
   const pdf = createExecutiveSummaryPdfBuffer(order, summary);
   const email = buildExecutiveSummaryEmail(order, summary);

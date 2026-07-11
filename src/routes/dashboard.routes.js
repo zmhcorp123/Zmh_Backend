@@ -283,7 +283,15 @@ router.patch("/dashboard/profile", requireAuth, asyncHandler(async (req, res) =>
     throw error;
   }
 
-  const allowed = ["name", "username", "company", "phone"];
+  for (const field of ["email", "company", "phone"]) {
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, field) && String(req.body[field] || "").trim() !== String(req.user[field] || "")) {
+      const error = new Error(`${field === "company" ? "Company name" : field === "phone" ? "Phone number" : "Email address"} cannot be changed after account creation.`);
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+
+  const allowed = ["name", "username"];
   const update = {};
 
   for (const field of allowed) {
@@ -398,7 +406,7 @@ router.get("/dashboard/services", requireAuth, asyncHandler(async (req, res) => 
   const services = orders.map((order) => {
     const timeline = progressByOrder[String(order._id)] || [];
     const activeServices = order.activeServices?.length ? order.activeServices : order.services || [];
-    const orderInvoices = invoices.filter((invoice) => String(invoice.user || "") === String(order.user || "") || invoice.company === order.companyName);
+    const orderInvoices = invoices.filter((invoice) => String(invoice.order || "") === String(order._id));
     const latestInvoice = orderInvoices[0] || null;
     const paymentHistory = orderInvoices.flatMap((invoice) => (submissionsByInvoice[String(invoice._id)] || []).map((submission) => ({ ...submission, invoice })));
     return {
