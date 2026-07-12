@@ -1480,14 +1480,24 @@ router.post("/settings", asyncHandler(async (req, res) => {
   const entries = Object.entries(req.body || {});
   const saved = [];
   for (const [key, value] of entries) {
+    if (key === "teamProfiles" && !Array.isArray(value)) {
+      const error = new Error("Team profiles must be an array.");
+      error.statusCode = 400;
+      throw error;
+    }
     const settingValue = key === "accountDetails" ? normalizeAccountDetails(value) : value;
     const setting = await Setting.findOneAndUpdate(
       { key },
       { value: settingValue, updatedBy: req.user._id },
-      { upsert: true, new: true }
+      { upsert: true, new: true, runValidators: true }
     );
     saved.push(setting);
   }
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
   res.json({ ok: true, settings: saved });
 }));
 

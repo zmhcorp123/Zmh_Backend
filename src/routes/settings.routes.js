@@ -4,8 +4,14 @@ const { asyncHandler } = require("../utils/asyncHandler");
 
 const router = express.Router();
 
-function cachePublicSettings(res) {
-  res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+function disablePublicSettingsCache(res) {
+  // These settings are edited in the admin panel and must never be served from
+  // a browser, CDN, or proxy cache after an update.
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
 }
 
 function normalizeLegacyFeatures(features) {
@@ -27,7 +33,7 @@ function normalizeLegacyPackage(item, index) {
 }
 
 router.get("/packages", asyncHandler(async (_req, res) => {
-  cachePublicSettings(res);
+  disablePublicSettingsCache(res);
   const pricing = await PackagePricing.find({ status: "active" }).sort({ displayOrder: 1, createdAt: 1 }).lean();
   if (pricing.length) {
     return res.json({
@@ -54,13 +60,13 @@ router.get("/packages", asyncHandler(async (_req, res) => {
 }));
 
 router.get("/company", asyncHandler(async (_req, res) => {
-  cachePublicSettings(res);
+  disablePublicSettingsCache(res);
   const setting = await Setting.findOne({ key: "companyDetails" }).lean();
   res.json({ ok: true, companyDetails: setting?.value || {} });
 }));
 
 router.get("/team-profiles", asyncHandler(async (_req, res) => {
-  cachePublicSettings(res);
+  disablePublicSettingsCache(res);
   const setting = await Setting.findOne({ key: "teamProfiles" }).lean();
   res.json({ ok: true, teamProfiles: Array.isArray(setting?.value) ? setting.value : null });
 }));

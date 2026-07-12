@@ -216,7 +216,7 @@ router.get("/dashboard/summary", requireAuth, asyncHandler(async (req, res) => {
     Notification.countDocuments({ ...notificationFilter, readAt: null }),
     SupportTicket.countDocuments(filter),
     Booking.find(filter)
-      .select("companyName email address services activeServices packageName packagePrice assignedStaff serviceStartDate requestedDate nextBillingDate progressPercent paymentStatus status updatedAt createdAt")
+      .select("companyName contactPerson email phone address services activeServices packageName packagePrice assignedStaff serviceStartDate requestedDate nextBillingDate progressPercent paymentStatus status updatedAt createdAt")
       .sort({ updatedAt: -1 })
       .limit(50)
       .lean(),
