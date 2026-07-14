@@ -1,12 +1,10 @@
 const express = require("express");
-const { Booking, User } = require("../models");
+const { Booking } = require("../models");
 const { sendEmail } = require("../config/email");
 const { EMAIL_ADDRESSES, EMAIL_SENDERS } = require("../config/emailConfig");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { requireAuth } = require("../middleware/auth");
-const { JWT_SECRET } = require("../config/env");
 const { validateEmail } = require("../utils/validateEmail");
-const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 const AFTER_HOURS_OPTIONS = ["No after-hours", "Evening calls", "Weekend coverage", "Emergency calls", "Overflow support"];
@@ -94,27 +92,16 @@ async function notifySalesOfBooking(booking, user) {
   }
 }
 
-async function attachUserIfPresent(req, _res, next) {
-  try {
-    const header = req.headers.authorization || "";
-    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-    if (token) {
-      const payload = jwt.verify(token, JWT_SECRET);
-      req.user = await User.findById(payload.id).select("-passwordHash");
-    }
-    next();
-  } catch (_error) {
-    next();
+router.post("/", requireAuth, asyncHandler(async (req, res) => {
+  if (!["user", "client"].includes(req.user.role)) {
+    const error = new Error("Only client accounts can submit booking requests.");
+    error.statusCode = 403;
+    throw error;
   }
-}
-
-router.post("/", attachUserIfPresent, asyncHandler(async (req, res) => {
   const payload = normalizeBooking(req.body);
-  if (req.user) {
-    payload.companyName = req.user.company || req.user.name;
-    payload.email = req.user.email;
-    payload.phone = req.user.phone || "";
-  }
+  payload.companyName = req.user.company || req.user.name;
+  payload.email = req.user.email;
+  payload.phone = req.user.phone || "";
   if (!payload.companyName) {
     const error = new Error("Company name is required");
     error.statusCode = 400;
@@ -129,7 +116,7 @@ router.post("/", attachUserIfPresent, asyncHandler(async (req, res) => {
   validateRequiredText(payload.hours, "Select office hours");
   validateOption(payload.afterHours, AFTER_HOURS_OPTIONS, "Select valid after-hours needs");
   if (payload.email) payload.email = validateEmail(payload.email);
-  if (req.user?._id) payload.user = req.user._id;
+  payload.user = req.user._id;
   const booking = await Booking.create(payload);
   notifySalesOfBooking(booking, req.user).catch((error) => {
     console.error("[sales booking email failed]", error.message);
